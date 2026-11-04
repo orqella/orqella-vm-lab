@@ -8,7 +8,12 @@ host-specific shell script.
 
 - Lists, creates, starts, stops, resets, and destroys local VMs.
 - Creates Linux cloud-image VMs with cloud-init, or boots a Linux/Windows ISO
-  for a manual installation through the browser console.
+  through the browser console.
+- Windows guests use IDE disks and Intel `e1000` networking so Windows Setup can
+  see the target disk without virtio drivers.
+- Windows ISO creation can generate an unattended-answer floppy. The guest gets
+  a local administrator `orqella`/`orqella`, bypasses Windows 11 compatibility
+  checks, and enables OpenSSH on first logon.
 - Supports a prepared disk image as the backing image.
 - Gives every running VM a VNC console through the Orqella module websocket
   bridge and an SSH terminal when the guest exposes SSH.
@@ -79,10 +84,12 @@ Windows 11 may require TPM/Secure Boot configuration; this version provides the
 UEFI path but does not auto-create a TPM. Customize the VM/catalog for stricter
 Windows requirements.
 
-Automatic Windows unattended installation is **not implemented** yet. Install
-Windows manually through the browser console using the ISO, then use **Finish
-install** to detach the installer. An unattended path needs a tested Windows
-ISO, answer-file generation, and a Windows test host before it can ship.
+Windows unattended installation is available when creating an ISO VM: enable
+**Unattended Windows install** in the New VM form. This has been validated with
+Windows 11 Enterprise Evaluation 24H2 on a BIOS-compatible QEMU setup. UEFI CD
+boot of that evaluation ISO currently fails under OVMF; investigate that before
+making UEFI the default for Windows guests. The manual install path also remains
+available.
 
 Automatic macOS guest creation is deliberately deferred. macOS guests require a
 macOS host and a prepared disk; the module accepts that disk but does not create
