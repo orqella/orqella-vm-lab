@@ -83,7 +83,7 @@ DEFAULT_CATALOG = [
     },
     {
         "id": "windows-11",
-        "name": "Windows 11 ISO (manual install)",
+        "name": "Windows 11 ISO (UEFI)",
         "os": "windows",
         "arch": "x86_64",
         "kind": "iso",
@@ -94,6 +94,22 @@ DEFAULT_CATALOG = [
         "disk_gb": 64,
         "uefi": True,
         "requires_path": True,
+        "note": "UEFI CD boot is under investigation for the current evaluation ISO. Use windows-11-bios for the validated unattended path.",
+    },
+    {
+        "id": "windows-11-bios",
+        "name": "Windows 11 ISO (BIOS compatibility)",
+        "os": "windows",
+        "arch": "x86_64",
+        "kind": "iso",
+        "path": "",
+        "user": "",
+        "cpus": 4,
+        "memory_mb": 8192,
+        "disk_gb": 64,
+        "uefi": False,
+        "requires_path": True,
+        "note": "Validated Windows 11 evaluation install path with unattended setup. Uses BIOS/SeaBIOS and Windows 11 compatibility bypasses.",
     },
     {
         "id": "macos",
@@ -373,9 +389,14 @@ def capabilities():
 def load_catalog():
     try:
         data = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
-        return [item for item in data if isinstance(item, dict) and item.get("id")]
+        items = [item for item in data if isinstance(item, dict) and item.get("id")]
     except (OSError, ValueError):
-        return DEFAULT_CATALOG
+        items = list(DEFAULT_CATALOG)
+    known = {str(item.get("id")) for item in items}
+    for item in DEFAULT_CATALOG:
+        if str(item.get("id")) not in known:
+            items.append(item)
+    return items
 
 
 def catalog_item(image_id):
