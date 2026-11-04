@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VM terminal</title><style>
+:root{color-scheme:dark;--bg:#080d10;--ink:#dbe9e4;--muted:#7f9894;--line:#20343b;--mint:#8be9c0;--red:#ff8b8b}*{box-sizing:border-box}html,body{height:100%;margin:0}body{background:var(--bg);color:var(--ink);font:12px/1.45 ui-monospace,monospace;display:flex;flex-direction:column}.bar{flex:none;display:flex;gap:10px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--line);color:var(--muted)}.bar b{color:var(--ink)}.bar .state{margin-left:auto}.state.good{color:var(--mint)}.state.bad{color:var(--red)}#out{flex:1;min-height:0;margin:0;padding:10px 12px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:var(--bg);color:var(--ink)}#entry{flex:none;width:100%;border:0;border-top:1px solid var(--line);background:#071014;color:var(--ink);padding:8px 12px;font:inherit;outline:none}
+</style></head><body><div class="bar"><b id="name">terminal</b><span>SSH</span><span class="state" id="state">connecting…</span></div><pre id="out"></pre><input id="entry" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type here…"></body><script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const name = params.get("name") || "";
+  const base = location.pathname.replace(/\/(?:ui\/)?terminal\.html$/, "/");
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const out = $("out");
+  const entry = $("entry");
+  $("name").textContent = name;
+  const ansi = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
+  let ws;
+  function setState(text, cls = "") { $("state").textContent = text; $("state").className = `state ${cls}`; }
+  function send(data) { if (ws?.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data)); }
+  try {
+    ws = new WebSocket(`${scheme}://${location.host}${base}ws/terminal?name=${encodeURIComponent(name)}`);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => { setState("connected", "good"); entry.focus(); };
+    ws.onmessage = (event) => {
+      if (typeof event.data === "string") out.textContent += event.data.replace(ansi, "");
+      else out.textContent += new TextDecoder().decode(new Uint8Array(event.data)).replace(ansi, "");
+      out.scrollTop = out.scrollHeight;
+    };
+    ws.onerror = () => setState("connection error", "bad");
+    ws.onclose = () => setState("disconnected", "bad");
+  } catch (error) { setState(error.message, "bad"); }
+  entry.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); send("\r"); }
+    else if (event.key === "Backspace") { event.preventDefault(); send("\x7f"); }
+    else if (event.key === "Tab") { event.preventDefault(); send("\t"); }
+    else if (event.key === "Escape") { event.preventDefault(); send("\x1b"); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); send("\x1b[A"); }
+    else if (event.key === "ArrowDown") { event.preventDefault(); send("\x1b[B"); }
+    else if (event.key === "ArrowLeft") { event.preventDefault(); send("\x1b[D"); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); send("\x1b[C"); }
+  });
+  entry.addEventListener("input", () => {
+    const value = entry.value;
+    entry.value = "";
+    if (value) send(value);
+  });
+})();
+</script></body></html>

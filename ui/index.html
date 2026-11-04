@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VM Lab</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="/assets/theme.css"></head>
+<body><main class="page">
+  <header class="head">
+    <div><p class="eyebrow">Machines</p><h1>VM Lab</h1><p class="sub" id="platform">Checking QEMU…</p></div>
+    <div class="head-actions"><button class="ghost" id="refresh" type="button">Refresh</button><button id="newToggle" type="button">New VM</button><button id="askAi" type="button">Ask AI</button></div>
+  </header>
+  <section class="setup" id="setup" hidden><div class="setup-head"><b>QEMU is not ready</b><span id="setupMissing"></span></div><p id="setupHelp"></p></section>
+  <section class="create" id="createPanel" hidden>
+    <form id="createForm">
+      <div class="form-grid">
+        <label>Name<input id="vmName" name="name" placeholder="lab" autocomplete="off" required></label>
+        <label>Bespoke config<select id="vmRecipe"><option value="">None — use image catalog</option></select></label>
+        <label>Image<select id="vmImage" name="image"></select></label>
+        <label>vCPUs<input id="vmCpus" type="number" min="1" max="64" step="1" required></label>
+        <label>Memory (MB)<input id="vmMemory" type="number" min="512" max="262144" step="512" required></label>
+        <label>Display<select id="vmDisplay"><option value="gui">Desktop window + console</option><option value="headless">Headless + console</option></select></label>
+        <label id="pathRow" hidden>Image / ISO path<input id="vmPath" placeholder="/path/to/image.iso" autocomplete="off"></label>
+      </div>
+      <p class="hint" id="imageHint"></p>
+      <div class="actions"><button id="createButton" type="submit">Create VM</button><span id="createStatus"></span></div>
+      <pre id="createLog" hidden></pre>
+    </form>
+  </section>
+  <section class="create agent" id="agentPanel" hidden>
+    <div class="setup-head"><b>Create a VM recipe with the default agent</b><span id="agentStatus"></span></div>
+    <p class="hint">Describe the image, resources, display mode, and guest setup. The agent writes a reusable recipe under <code>recipes/</code>; it can also download images and add cloud-init or SSH provisioning.</p>
+    <textarea id="agentPrompt" placeholder="e.g. Create a headless Ubuntu 24.04 VM recipe with Docker, git, and a 40 GB disk."></textarea>
+    <div class="actions"><button id="agentRun" type="button">Create recipe</button></div>
+    <pre id="agentLog" hidden></pre>
+  </section>
+  <section class="summary" id="summary"></section>
+  <div class="grid" id="vmList"></div>
+  <p class="hint">The web console is VNC over the module bridge. Headless machines still expose their guest console there; SSH is available once the guest is up.</p>
+  <section class="modal" id="consoleModal" hidden><div class="modal-box"><div class="modal-head"><b id="consoleTitle">Console</b><button class="ghost" id="consoleClose" type="button">Close</button></div><iframe id="consoleFrame" title="VM console" sandbox="allow-scripts allow-same-origin"></iframe></div></section>
+  <section class="modal" id="terminalModal" hidden><div class="modal-box"><div class="modal-head"><b id="terminalTitle">Terminal</b><button class="ghost" id="terminalClose" type="button">Close</button></div><iframe id="terminalFrame" title="VM terminal" sandbox="allow-scripts allow-same-origin"></iframe></div></section>
+</main><script src="app.js"></script></body></html>

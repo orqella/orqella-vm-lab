@@ -1,0 +1,341 @@
+// Minimal noVNC wrapper for the VM Lab module.
+// The actual RFB client is vendored under ./novnc/core (noVNC 1.7.0, MPL-2.0).
+
+import RFB from "./novnc/core/rfb.js";
+
+const params = new URLSearchParams(location.search);
+const vm = (params.get("name") || params.get("vm") || "").trim();
+const screen = document.getElementById("screen");
+const overlay = document.getElementById("overlay");
+const overlayTitle = document.getElementById("overlayTitle");
+const overlayText = document.getElementById("overlayText");
+const spinner = document.getElementById("spinner");
+const stateEl = document.getElementById("state");
+const nameEl = document.getElementById("name");
+const reconnectBtn = document.getElementById("reconnect");
+const fullscreenBtn = document.getElementById("fullscreen");
+const keyboardBtn = document.getElementById("keyboard");
+const backspaceBtn = document.getElementById("backspace");
+const enterBtn = document.getElementById("enter");
+const tabBtn = document.getElementById("tab");
+const escBtn = document.getElementById("esc");
+const ctrlBtn = document.getElementById("ctrl");
+const altBtn = document.getElementById("alt");
+const shiftBtn = document.getElementById("shift");
+const superBtn = document.getElementById("super");
+const kbd = document.getElementById("kbd");
+
+let rfb = null;
+let composing = false;
+let stopped = false;
+let retryTimer = null;
+let retryDelay = 1200;
+
+function setState(text) {
+  stateEl.textContent = text;
+}
+
+function showOverlay(title, text, spinning = false) {
+  overlay.hidden = false;
+  overlayTitle.textContent = title;
+  overlayText.textContent = text;
+  spinner.style.display = spinning ? "" : "none";
+}
+
+function hideOverlay() {
+  overlay.hidden = true;
+}
+
+function showFatal(title, text) {
+  stopped = true;
+  setState("offline");
+  showOverlay(title, text, false);
+}
+
+function connect() {
+  if (!vm) {
+    showFatal("No VM selected", "Open this console from a VM card in VM Lab.");
+    return;
+  }
+  if (rfb) {
+    stopped = true;
+    try { rfb.disconnect(); } catch (_) {}
+    rfb = null;
+  }
+  clearTimeout(retryTimer);
+  stopped = false;
+  retryDelay = 1200;
+  clearModifiers();
+  setState("connecting…");
+  showOverlay("Connecting to " + vm + "…", "Opening the framebuffer.", true);
+
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const base = location.pathname.replace(/\/(?:ui\/)?console\.html$/, "/");
+  const url = `${scheme}://${location.host}${base}ws/console?name=${encodeURIComponent(vm)}`;
+
+  try {
+    rfb = new RFB(screen, url);
+  } catch (err) {
+    showFatal("Could not start the VNC client", String(err && err.message || err));
+    return;
+  }
+
+  rfb.background = "#0e0e14";
+  rfb.scaleViewport = true;
+  rfb.resizeSession = false;
+  rfb.clipViewport = false;
+  rfb.viewOnly = false;
+  rfb.focusOnClick = true;
+  rfb.showDotCursor = true;
+
+  rfb.addEventListener("connect", () => {
+    retryDelay = 1200;
+    setState("connected");
+    hideOverlay();
+    nameEl.textContent = vm;
+    document.title = `${vm} — VM console`;
+    try { rfb.focus(); } catch (_) {}
+  });
+
+  rfb.addEventListener("desktopname", (e) => {
+    if (e.detail && e.detail.name) {
+      nameEl.textContent = `${vm} · ${e.detail.name}`;
+      document.title = `${vm} — VM console`;
+    }
+  });
+
+  rfb.addEventListener("disconnect", (e) => {
+    clearModifiers();
+    setState("disconnected");
+    if (stopped) return;
+    const clean = e.detail && e.detail.clean;
+    showOverlay(
+      clean ? "VM console disconnected" : "VM console lost",
+      clean ? "The session ended." : "The VM may have stopped, or the VNC port closed. Retrying…",
+      true,
+    );
+    retryTimer = setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 1.6, 8000);
+  });
+
+  rfb.addEventListener("credentialsrequired", () => {
+    const password = window.prompt("VNC password (local VMs normally do not use one):");
+    if (password !== null) {
+      try { rfb.sendCredentials({ password }); } catch (_) {}
+    }
+  });
+
+  rfb.addEventListener("securityfailure", (e) => {
+    showFatal("VNC security negotiation failed", String(e.detail && e.detail.reason || "Unknown error"));
+  });
+
+  rfb.addEventListener("clipboard", (e) => {
+    if (e.detail && e.detail.text && navigator.clipboard) {
+      navigator.clipboard.writeText(e.detail.text).catch(() => {});
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// On-screen keyboard bridge
+//
+// Mobile browsers will not open their keyboard for a canvas.  The Keyboard
+// button reveals and focuses a slim text field; its input/keydown events are
+// translated into RFB key events.  The canvas still handles hardware keyboards
+// normally when it has focus.
+// ---------------------------------------------------------------------------
+const SPECIAL_KEYS = {
+  Backspace: [0xFF08, "Backspace"],
+  Enter: [0xFF0D, "Enter"],
+  Tab: [0xFF09, "Tab"],
+  Escape: [0xFF1B, "Escape"],
+  Delete: [0xFFFF, "Delete"],
+  Home: [0xFF50, "Home"],
+  End: [0xFF57, "End"],
+  PageUp: [0xFF55, "PageUp"],
+  PageDown: [0xFF56, "PageDown"],
+  ArrowLeft: [0xFF51, "ArrowLeft"],
+  ArrowUp: [0xFF52, "ArrowUp"],
+  ArrowRight: [0xFF53, "ArrowRight"],
+  ArrowDown: [0xFF54, "ArrowDown"],
+};
+
+function sendKey(keysym, code = "Unidentified") {
+  if (!rfb) return;
+  try { rfb.sendKey(keysym, code); } catch (_) {}
+}
+
+// One-shot modifiers.  They apply to the next text character, special key or
+// toolbar key, then clear.  Several can be armed together (e.g. Super+Shift).
+const MODIFIERS = [
+  { name: "Ctrl", btn: ctrlBtn, keysym: 0xFFE3, code: "ControlLeft" },
+  { name: "Alt", btn: altBtn, keysym: 0xFFE9, code: "AltLeft" },
+  { name: "Shift", btn: shiftBtn, keysym: 0xFFE1, code: "ShiftLeft" },
+  { name: "Super", btn: superBtn, keysym: 0xFFEB, code: "MetaLeft" },
+];
+const armedModifiers = new Set();
+
+function setModifier(def, active) {
+  if (active) armedModifiers.add(def.name);
+  else armedModifiers.delete(def.name);
+  def.btn.classList.toggle("active", active);
+  def.btn.setAttribute("aria-pressed", String(active));
+}
+
+function toggleModifier(def) {
+  setModifier(def, !armedModifiers.has(def.name));
+}
+
+function clearModifiers() {
+  for (const def of MODIFIERS) setModifier(def, false);
+}
+
+function sendKeyOne(keysym, code = "Unidentified") {
+  if (!rfb) return;
+  const active = MODIFIERS.filter((def) => armedModifiers.has(def.name));
+  try {
+    for (const def of active) rfb.sendKey(def.keysym, def.code, true);
+    rfb.sendKey(keysym, code);
+    for (const def of [...active].reverse()) rfb.sendKey(def.keysym, def.code, false);
+  } catch (_) {
+  } finally {
+    clearModifiers();
+  }
+}
+
+function sendText(text) {
+  const chars = Array.from(text);
+  const useMods = armedModifiers.size > 0;
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    const cp = ch.codePointAt(0);
+    let keysym;
+    if (cp === 0x0A || cp === 0x0D) keysym = 0xFF0D;
+    else if (cp === 0x09) keysym = 0xFF09;
+    else if (cp >= 0x20 && cp <= 0xFF) keysym = cp;
+    else keysym = 0x01000000 + cp; // X11 Unicode keysym
+
+    const code = cp === 0x0D ? "Enter" : (cp === 0x09 ? "Tab" : "Unidentified");
+    if (useMods && i === 0) sendKeyOne(keysym, code);
+    else sendKey(keysym, code);
+  }
+}
+
+function focusKeyboard() {
+  if (!kbd) return;
+  kbd.value = "";
+  kbd.classList.add("visible");
+  keyboardBtn.classList.add("active");
+  try {
+    kbd.focus();
+    kbd.setSelectionRange(0, 0);
+  } catch (_) {}
+}
+
+keyboardBtn.addEventListener("click", () => {
+  if (kbd.classList.contains("visible") && document.activeElement === kbd) {
+    kbd.blur();
+    kbd.classList.remove("visible");
+    keyboardBtn.classList.remove("active");
+    clearModifiers();
+  } else {
+    focusKeyboard();
+  }
+});
+backspaceBtn.addEventListener("click", () => {
+  sendKeyOne(0xFF08, "Backspace");
+  focusKeyboard();
+});
+enterBtn.addEventListener("click", () => {
+  sendKeyOne(0xFF0D, "Enter");
+  focusKeyboard();
+});
+tabBtn.addEventListener("click", () => {
+  sendKeyOne(0xFF09, "Tab");
+  focusKeyboard();
+});
+escBtn.addEventListener("click", () => {
+  sendKeyOne(0xFF1B, "Escape");
+  focusKeyboard();
+});
+for (const def of MODIFIERS) {
+  def.btn.setAttribute("aria-pressed", "false");
+  def.btn.addEventListener("click", () => {
+    toggleModifier(def);
+    focusKeyboard();
+  });
+}
+
+kbd.addEventListener("compositionstart", () => { composing = true; });
+kbd.addEventListener("compositionend", (e) => {
+  composing = false;
+  if (e.data) sendText(e.data);
+  kbd.value = "";
+});
+kbd.addEventListener("beforeinput", (e) => {
+  if (composing) return;
+  if (e.inputType === "deleteContentBackward") {
+    e.preventDefault();
+    sendKeyOne(0xFF08, "Backspace");
+  } else if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") {
+    e.preventDefault();
+    sendKeyOne(0xFF0D, "Enter");
+  }
+});
+kbd.addEventListener("input", () => {
+  if (composing) return;
+  const text = kbd.value;
+  kbd.value = "";
+  if (text) sendText(text);
+});
+kbd.addEventListener("keydown", (e) => {
+  if (e.isComposing) return;
+  const special = SPECIAL_KEYS[e.key];
+  if (special) {
+    e.preventDefault();
+    sendKeyOne(special[0], special[1]);
+    return;
+  }
+  // Printable characters are handled by the input event.  This also covers
+  // phone keyboards and IMEs that do not emit usable keydown data.
+});
+
+// Tapping the framebuffer should hand focus back to noVNC (and close the
+// phone keyboard), matching desktop behaviour.
+screen.addEventListener("pointerdown", () => {
+  if (kbd.classList.contains("visible")) {
+    kbd.blur();
+    kbd.classList.remove("visible");
+    keyboardBtn.classList.remove("active");
+    clearModifiers();
+  }
+});
+
+reconnectBtn.addEventListener("click", connect);
+
+fullscreenBtn.addEventListener("click", async () => {
+  try {
+    if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+    else await document.exitFullscreen();
+    setTimeout(() => { try { rfb && rfb.focus(); } catch (_) {} }, 120);
+  } catch (_) {}
+});
+
+window.addEventListener("paste", (e) => {
+  const text = e.clipboardData && e.clipboardData.getData("text");
+  if (text && rfb) {
+    try { rfb.clipboardPasteFrom(text); } catch (_) {}
+  }
+});
+
+window.addEventListener("beforeunload", () => {
+  stopped = true;
+  clearTimeout(retryTimer);
+  try { rfb && rfb.disconnect(); } catch (_) {}
+});
+
+if (vm) {
+  nameEl.textContent = vm;
+  document.title = `${vm} — VM console`;
+}
+connect();

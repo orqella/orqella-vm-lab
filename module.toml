@@ -1,0 +1,65 @@
+schema = 1
+id = "vm-lab"
+name = "VM Lab"
+version = "0.1.0"
+api_version = "1"
+description = "Create and control local Linux, Windows, and macOS VMs with a browser console."
+entry = "ui/index.html"
+overview = "ui/overview.html"
+overview_default = true
+page_default = true
+icon = "ui/icon.svg"
+node_scope = "node"
+permissions = ["backend", "agent"]
+
+[ui]
+surface = "page"
+
+[backend]
+kind = "sidecar"
+command = ["python3", "backend/server.py"]
+health_path = "/health"
+ready_timeout_ms = 15000
+sandbox = false
+
+[[config.fields]]
+key = "qemu_path"
+type = "text"
+label = "QEMU system binary"
+default = ""
+help = "Optional absolute path. Leave blank to find qemu-system-x86_64 or qemu-system-aarch64 on PATH."
+
+[[config.fields]]
+key = "qemu_img_path"
+type = "text"
+label = "qemu-img binary"
+default = ""
+help = "Optional absolute path. Leave blank to find qemu-img on PATH."
+
+[[config.fields]]
+key = "default_cpus"
+type = "number"
+label = "Default vCPUs"
+default = 2
+min = 1
+max = 64
+step = 1
+
+[[config.fields]]
+key = "default_memory_mb"
+type = "number"
+label = "Default memory (MB)"
+default = 4096
+min = 512
+max = 262144
+step = 512
+
+[[config.fields]]
+key = "default_display"
+type = "select"
+label = "Default display"
+default = "gui"
+options = [
+  { value = "gui", label = "Desktop window + web console" },
+  { value = "headless", label = "Headless + web console" },
+]

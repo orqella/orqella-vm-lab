@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" data-theme="tokyo-night">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VM console</title>
+  <style>
+    :root {
+      --bg: #0e0e14;
+      --panel: #1a1b26;
+      --border: #292e42;
+      --fg: #a9b1d6;
+      --bright: #c0caf5;
+      --accent: #7aa2f7;
+      --red: #f7768e;
+      --green: #9ece6a;
+      --mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; }
+    #app { display: flex; flex-direction: column; height: 100%; }
+    #bar {
+      flex: none; display: flex; align-items: center; gap: 7px;
+      padding: 5px 10px; min-height: 34px;
+      background: color-mix(in srgb, var(--panel) 88%, #000);
+      border-bottom: 1px solid var(--border);
+      user-select: none; overflow-x: auto; white-space: nowrap;
+    }
+    #bar button { flex: none; }
+    #bar button.active { border-color: var(--green); color: var(--green); }
+    #name { color: var(--bright); font-weight: 600; }
+    #state { color: var(--fg); opacity: .72; font-size: 11.5px; }
+    #spacer { flex: 1; }
+    button {
+      border: 1px solid var(--border); background: #16171f; color: var(--fg);
+      border-radius: 7px; padding: 4px 9px; font: inherit; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--bright); }
+    #screen {
+      flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+      background: var(--bg); outline: none;
+    }
+    #screen canvas { cursor: default; }
+    #overlay {
+      position: absolute; inset: 34px 0 0 0; display: grid; place-items: center;
+      pointer-events: none; background: radial-gradient(60% 60% at 50% 45%, rgba(14,14,20,.72), rgba(14,14,20,.96));
+      transition: opacity .2s ease;
+    }
+    #overlay[hidden] { display: none; }
+    .card {
+      pointer-events: auto; max-width: 420px; padding: 20px 22px; text-align: center;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border); border-radius: 14px;
+      box-shadow: 0 22px 60px -28px #000;
+    }
+    .card h1 { margin: 0 0 6px; font-size: 16px; color: var(--bright); font-weight: 650; }
+    .card p { margin: 0; color: var(--fg); opacity: .8; }
+    .card .err { color: var(--red); }
+    .spinner {
+      width: 26px; height: 26px; margin: 0 auto 12px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #hint { font-family: var(--mono); font-size: 11px; opacity: .55; margin-top: 12px; }
+
+    /* Slim "type to the VM" field; focusing it summons the phone keyboard. */
+    #kbd {
+      position: fixed; left: 8px; right: 8px; bottom: 8px;
+      height: 36px; width: auto;
+      padding: 0 12px; margin: 0;
+      font-size: 16px; line-height: 34px;
+      color: var(--bright); background: #16171f;
+      border: 1px solid var(--border); border-radius: 9px;
+      box-shadow: 0 10px 28px -12px #000;
+      resize: none; outline: none; display: none; z-index: 6;
+    }
+    #kbd.visible { display: block; }
+    #kbd:focus { border-color: var(--accent); }
+  </style>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231a1b26'/%3E%3Cpath d='M9 22V10l7 7 7-7v12' fill='none' stroke='%237aa2f7' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <div id="app">
+    <div id="bar">
+      <span id="name">VM console</span>
+      <span id="state">connecting…</span>
+      <span id="spacer"></span>
+      <button id="keyboard" title="Show the device keyboard">⌨ Keyboard</button>
+      <button id="ctrl" title="Ctrl for the next key">Ctrl</button>
+      <button id="alt" title="Alt for the next key">Alt</button>
+      <button id="shift" title="Shift for the next key">Shift</button>
+      <button id="super" title="Super/Meta for the next key">Super</button>
+      <button id="backspace" title="Backspace">⌫</button>
+      <button id="enter" title="Return">⏎</button>
+      <button id="tab" title="Tab">Tab</button>
+      <button id="esc" title="Escape">Esc</button>
+      <button id="reconnect" title="Reconnect">⟳ Reconnect</button>
+      <button id="fullscreen" title="Fullscreen">⛶</button>
+    </div>
+    <div id="screen" tabindex="0"></div>
+  </div>
+  <textarea id="kbd" aria-label="Type to the virtual machine"
+            placeholder="Type to the VM…" rows="1"
+            autocomplete="off" autocapitalize="off" autocorrect="off"
+            spellcheck="false" inputmode="text"></textarea>
+  <div id="overlay">
+    <div class="card">
+      <div class="spinner" id="spinner"></div>
+      <h1 id="overlayTitle">Connecting to the VM…</h1>
+      <p id="overlayText">Opening the framebuffer.</p>
+      <p id="hint">Tap Keyboard for your phone's keyboard. On desktop, click the screen to capture the keyboard; Ctrl+Alt+G releases the pointer.</p>
+    </div>
+  </div>
+  <script>
+    // Keep client-side failures visible instead of leaving a forever spinner.
+    function consoleError(title, text) {
+      const overlay = document.getElementById("overlay");
+      const spinner = document.getElementById("spinner");
+      if (!overlay) return;
+      overlay.hidden = false;
+      if (spinner) spinner.style.display = "none";
+      const t = document.getElementById("overlayTitle");
+      const p = document.getElementById("overlayText");
+      if (t) t.textContent = title;
+      if (p) p.textContent = String(text || "Unknown error");
+    }
+    window.addEventListener("error", (e) => consoleError("Console script error", e.message));
+    window.addEventListener("unhandledrejection", (e) => {
+      const reason = e.reason && (e.reason.message || e.reason);
+      consoleError("Console script error", reason);
+    });
+  </script>
+  <script type="module" src="./console.js"></script>
+</body>
+</html>
