@@ -5,3 +5,8 @@ node_modules/
 target/
 __pycache__/
 sidecar.log
+
+# Runtime state written by QEMU/PulseAudio
+.config/
+.cache/
+.local/
