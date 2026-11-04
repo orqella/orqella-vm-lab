@@ -79,6 +79,15 @@ Windows 11 may require TPM/Secure Boot configuration; this version provides the
 UEFI path but does not auto-create a TPM. Customize the VM/catalog for stricter
 Windows requirements.
 
+Automatic Windows unattended installation is **not implemented** yet. Install
+Windows manually through the browser console using the ISO, then use **Finish
+install** to detach the installer. An unattended path needs a tested Windows
+ISO, answer-file generation, and a Windows test host before it can ship.
+
+Automatic macOS guest creation is deliberately deferred. macOS guests require a
+macOS host and a prepared disk; the module accepts that disk but does not create
+or provision it.
+
 ## Security
 
 The sidecar runs unsandboxed because it must launch QEMU, manage disks, and
