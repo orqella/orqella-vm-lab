@@ -89,6 +89,7 @@
     if (images.some((image) => image.id === previous)) select.value = previous;
     const selected = images.find((image) => image.id === select.value);
     if (!$("vmRecipe").value) $("pathRow").hidden = !selected?.requires_path;
+    $("unattendRow").hidden = !(selected?.kind === "iso" || selected?.os === "windows" || $("vmRecipe").value);
     $("imageHint").textContent = selected?.note || (selected?.kind === "cloud" ? "The base image downloads on first create." : selected?.kind === "iso" ? "Installer boots through the web console; install, then choose Finish install." : "");
     if (selected && !$("vmRecipe").value) {
       $("vmCpus").value = selected.cpus || context.config.default_cpus || 2;
@@ -177,6 +178,7 @@
       memory_mb: Number($("vmMemory").value),
       display: $("vmDisplay").value,
       path,
+      unattend: $("vmUnattend").checked,
       start: true,
     };
     $("createButton").disabled = true;

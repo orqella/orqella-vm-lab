@@ -610,15 +610,25 @@ def qemu_args(name, meta):
     machine = "q35" if (meta.get("arch") or "x86_64") == "x86_64" else "virt"
     args += ["-machine", machine]
     args += acceleration(meta.get("arch") or host_arch())
+    windows = meta.get("os") == "windows"
+    if windows:
+        # Windows Setup does not include virtio-blk or virtio-net drivers.
+        disk_args = ["-drive", f"file={disk},if=none,id=disk0,format=qcow2", "-device", "ide-hd,drive=disk0"]
+        net_device = "e1000"
+    else:
+        disk_args = ["-drive", f"file={disk},if=virtio,format=qcow2"]
+        net_device = "virtio-net-pci"
     args += [
         "-smp", str(int(meta.get("cpus") or 2)),
         "-m", str(int(meta.get("memory_mb") or 4096)),
-        "-drive", f"file={disk},if=virtio,format=qcow2",
+        *disk_args,
         "-netdev", f"user,id=net0,hostfwd=tcp:127.0.0.1:{meta['ssh_port']}-:22",
-        "-device", "virtio-net-pci,netdev=net0",
+        "-device", f"{net_device},netdev=net0",
         "-vnc", f"127.0.0.1:{int(meta['vnc_port']) - 5900}",
         "-qmp", f"tcp:127.0.0.1:{meta['qmp_port']},server=on,wait=off",
         "-pidfile", str(vm_dir(name) / "qemu.pid"),
+        "-device", "qemu-xhci",
+        "-device", "usb-tablet",
     ]
     if meta.get("display") == "headless":
         args += ["-display", "none"]
@@ -635,6 +645,8 @@ def qemu_args(name, meta):
         ]
     if meta.get("kind") == "iso" and meta.get("iso") and not meta.get("installed"):
         args += ["-cdrom", str(meta["iso"]), "-boot", "order=d"]
+    if meta.get("unattend") and (vm_dir(name) / "unattend" / "autounattend.img").is_file():
+        args += ["-drive", f"file={vm_dir(name) / 'unattend' / 'autounattend.img'},if=floppy,format=raw"]
     if meta.get("kind") == "cloud" and meta.get("seed_port"):
         args += ["-smbios", f"type=1,serial=ds=nocloud-net;s=http://10.0.2.2:{meta['seed_port']}/"]
     return args
@@ -730,6 +742,186 @@ def write_seed(name, image, key, cloud_init_extra=""):
     (seed / "user-data").write_text(user_data_text, encoding="utf-8")
 
 
+
+def _fat12_set(fat: bytearray, cluster: int, value: int) -> None:
+    offset = cluster + cluster // 2
+    if cluster & 1:
+        fat[offset] = (fat[offset] & 0x0F) | ((value << 4) & 0xF0)
+        fat[offset + 1] = (value >> 4) & 0xFF
+    else:
+        fat[offset] = value & 0xFF
+        fat[offset + 1] = (fat[offset + 1] & 0xF0) | ((value >> 8) & 0x0F)
+
+
+def _fat_lfn_entries(name: str, short: bytes) -> list[bytes]:
+    checksum = 0
+    for byte in short:
+        checksum = ((checksum & 1) << 7) + (checksum >> 1) + byte
+        checksum &= 0xFF
+    raw = name.encode("utf-16le") + b"\x00\x00"
+    while len(raw) % 26:
+        raw += b"\xff"
+    chunks = [raw[index:index + 26] for index in range(0, len(raw), 26)]
+    entries = []
+    for order in range(len(chunks), 0, -1):
+        chunk = chunks[order - 1]
+        entry = bytearray(32)
+        entry[0] = order | (0x40 if order == len(chunks) else 0)
+        entry[1:11] = chunk[0:10]
+        entry[11] = 0x0F
+        entry[13] = checksum
+        entry[14:26] = chunk[10:22]
+        entry[28:32] = chunk[22:26]
+        entries.append(bytes(entry))
+    return entries
+
+
+def _fat_short_name(name: str) -> bytes:
+    base, _, ext = name.upper().partition(".")
+    base = re.sub(r"[^A-Z0-9]", "", base)[:8]
+    ext = re.sub(r"[^A-Z0-9]", "", ext)[:3]
+    return (base[:6] + "~1").ljust(8)[:8].encode("ascii") + ext.ljust(3).encode("ascii")
+
+
+def make_floppy(path: Path, filename: str, content: bytes) -> None:
+    """Create a 1.44 MB FAT12 floppy containing one file."""
+    image = bytearray(1440 * 1024)
+    sector = 512
+    total_sectors = 2880
+    fat_sectors = 9
+    root_sectors = 14
+    root_sector = 1 + 2 * fat_sectors
+    data_sector = root_sector + root_sectors
+    clusters = max(1, (len(content) + sector - 1) // sector)
+    if 2 + clusters > 2847:
+        raise ValueError("unattend file is too large for a floppy image")
+    boot = bytearray(sector)
+    boot[0:3] = b"\xEB\x3C\x90"
+    boot[3:11] = b"MSWIN4.1"
+    struct.pack_into("<H", boot, 11, sector)
+    boot[13] = 1
+    struct.pack_into("<H", boot, 14, 1)
+    boot[16] = 2
+    struct.pack_into("<H", boot, 17, 224)
+    struct.pack_into("<H", boot, 19, total_sectors)
+    boot[21] = 0xF0
+    struct.pack_into("<H", boot, 22, fat_sectors)
+    struct.pack_into("<H", boot, 24, 18)
+    struct.pack_into("<H", boot, 26, 2)
+    boot[36] = 0x00
+    boot[38] = 0x29
+    struct.pack_into("<I", boot, 39, 0x4F524745)
+    boot[43:54] = b"ORQELLA    "
+    boot[54:62] = b"FAT12   "
+    boot[510:512] = b"\x55\xAA"
+    image[0:sector] = boot
+    fat = bytearray(fat_sectors * sector)
+    fat[0:3] = b"\xF0\xFF\xFF"
+    for cluster in range(2, 2 + clusters):
+        _fat12_set(fat, cluster, 0x0FFF if cluster == 1 + clusters else cluster + 1)
+    image[sector:sector + len(fat)] = fat
+    fat2 = (1 + fat_sectors) * sector
+    image[fat2:fat2 + len(fat)] = fat
+    short = _fat_short_name(filename)
+    root = bytearray(root_sectors * sector)
+    entries = _fat_lfn_entries(filename, short)
+    offset = 0
+    for entry in entries:
+        root[offset:offset + 32] = entry
+        offset += 32
+    short_entry = bytearray(32)
+    short_entry[0:11] = short
+    short_entry[11] = 0x20
+    struct.pack_into("<H", short_entry, 26, 2)
+    struct.pack_into("<I", short_entry, 28, len(content))
+    root[offset:offset + 32] = short_entry
+    image[root_sector * sector:(root_sector + root_sectors) * sector] = root
+    data_offset = data_sector * sector
+    image[data_offset:data_offset + len(content)] = content
+    path.write_bytes(image)
+
+
+def windows_unattend_xml(name: str, uefi: bool, user: str, password: str) -> str:
+    from xml.sax.saxutils import escape
+
+    if uefi:
+        partitions = '''<CreatePartition wcm:action="add"><Order>1</Order><Type>EFI</Type><Size>100</Size></CreatePartition>
+          <CreatePartition wcm:action="add"><Order>2</Order><Type>MSR</Type><Size>16</Size></CreatePartition>
+          <CreatePartition wcm:action="add"><Order>3</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition>'''
+        modify = '''<ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format><Label>System</Label></ModifyPartition>
+            <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>2</PartitionID></ModifyPartition>
+            <ModifyPartition wcm:action="add"><Order>3</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter></ModifyPartition>'''
+        install_partition = 3
+    else:
+        partitions = '''<CreatePartition wcm:action="add"><Order>1</Order><Type>Primary</Type><Size>500</Size></CreatePartition>
+          <CreatePartition wcm:action="add"><Order>2</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition>'''
+        modify = '''<ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>NTFS</Format><Label>System</Label><Active>true</Active></ModifyPartition>
+            <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>2</PartitionID><Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter></ModifyPartition>'''
+        install_partition = 2
+    computer = re.sub(r"[^A-Za-z0-9-]", "-", name)[:15] or "ORQELLA-WIN"
+    user = escape(user)
+    password = escape(password)
+    ssh = escape(
+        'powershell -NoProfile -ExecutionPolicy Bypass -Command "'
+        'Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; '
+        'Set-Service sshd -StartupType Automatic; Start-Service sshd; '
+        'New-NetFirewallRule -Name OrqellaSSH -DisplayName OrqellaSSH -Enabled True '
+        '-Direction Inbound -Protocol TCP -Action Allow -LocalPort 22"'
+    )
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add"><Order>3</Order><Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add"><Order>4</Order><Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+      </RunSynchronous>
+      <DiskConfiguration>
+        <Disk wcm:action="add"><DiskID>0</DiskID><WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>{partitions}</CreatePartitions>
+          <ModifyPartitions>{modify}</ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+      <ImageInstall><OSImage><InstallFrom><MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>1</Value></MetaData></InstallFrom><InstallTo><DiskID>0</DiskID><PartitionID>{install_partition}</PartitionID></InstallTo></OSImage></ImageInstall>
+      <UserData><AcceptEula>true</AcceptEula><FullName>Orqella</FullName><Organization>Orqella</Organization></UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <ComputerName>{computer}</ComputerName><TimeZone>UTC</TimeZone>
+    </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <RunSynchronous><RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand></RunSynchronous>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <OOBE><HideEULAPage>true</HideEULAPage><HideLocalAccountScreen>true</HideLocalAccountScreen><HideOEMRegistrationScreen>true</HideOEMRegistrationScreen><HideOnlineAccountScreens>true</HideOnlineAccountScreens><HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE><NetworkLocation>Work</NetworkLocation><ProtectYourPC>3</ProtectYourPC></OOBE>
+      <UserAccounts><LocalAccounts><LocalAccount wcm:action="add"><Password><Value>{password}</Value><PlainText>true</PlainText></Password><Description>Orqella</Description><DisplayName>{user}</DisplayName><Group>Administrators</Group><Name>{user}</Name></LocalAccount></LocalAccounts></UserAccounts>
+      <AutoLogon><Password><Value>{password}</Value><PlainText>true</PlainText></Password><Enabled>true</Enabled><LogonCount>5</LogonCount><Username>{user}</Username></AutoLogon>
+      <FirstLogonCommands><SynchronousCommand wcm:action="add"><Order>1</Order><CommandLine>{ssh}</CommandLine><Description>Enable OpenSSH</Description></SynchronousCommand></FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>
+'''
+
+
+def write_windows_unattend(name: str, meta: dict, user: str, password: str) -> None:
+    directory = vm_dir(name) / "unattend"
+    directory.mkdir(parents=True, exist_ok=True)
+    xml = windows_unattend_xml(name, bool(meta.get("uefi")), user, password)
+    (directory / "autounattend.xml").write_text(xml, encoding="utf-8")
+    make_floppy(directory / "autounattend.img", "AUTOUNATTEND.XML", xml.encode("utf-8"))
+
 def prepare_disk(name, image, base_path, job_log):
     tool = qemu_img()
     disk = vm_dir(name) / "disk.qcow2"
@@ -823,6 +1015,9 @@ def create_vm(name, payload, job):
     if not recipe and path_override and image.get("kind") in {"iso", "disk"}:
         image = dict(image)
         image["path"] = path_override
+    unattend = bool(payload.get("unattend"))
+    unattend_user = str(payload.get("windows_user") or "orqella").strip() or "orqella"
+    unattend_password = str(payload.get("windows_password") or "orqella")
     job["status"] = "running"
     job["log"] = ""
 
@@ -862,7 +1057,18 @@ def create_vm(name, payload, job):
             "created": int(time.time()),
             "pid": None,
             "installed": image.get("kind") != "iso",
+            "unattend": False,
+            "unattend_user": "",
+            "unattend_password": "",
         }
+        if unattend:
+            meta["unattend"] = True
+            meta["unattend_user"] = unattend_user
+            meta["unattend_password"] = unattend_password
+            if not meta.get("guest_user"):
+                meta["guest_user"] = unattend_user
+            write_windows_unattend(name, meta, unattend_user, unattend_password)
+            log(f"Unattended install configured for {unattend_user} (password: {unattend_password}).")
         write_meta(name, meta)
         if meta["kind"] == "iso":
             log("Installer ISO attached. Install through the web console, then use Finish install before rebooting.")
@@ -905,6 +1111,8 @@ def list_vms():
             "memory_mb": meta.get("memory_mb"),
             "running": alive,
             "installed": bool(meta.get("installed", True)),
+            "unattend": bool(meta.get("unattend", False)),
+            "unattend_user": meta.get("unattend_user") or "",
             "uuid": meta.get("uuid"),
             "created": meta.get("created"),
             "ssh_port": meta.get("ssh_port"),
@@ -956,6 +1164,7 @@ def action_vm(name, action):
     if action == "eject":
         stop_vm(name)
         meta["installed"] = True
+        meta["unattend"] = False
         write_meta(name, meta)
         return start_vm(name)
     raise ValueError(f"unknown action: {action}")

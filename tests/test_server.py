@@ -108,6 +108,66 @@ class VmLabTests(unittest.TestCase):
         args = server.qemu_args(name, meta)
         self.assertTrue(any("nocloud-net" in value for value in args))
 
+    def test_unattend_floppy_and_xml(self) -> None:
+        xml = server.windows_unattend_xml("win-test", False, "orqella", "orqella")
+        self.assertIn("<DiskID>0</DiskID>", xml)
+        self.assertIn("BypassTPMCheck", xml)
+        self.assertIn("<Name>orqella</Name>", xml)
+        image = self.root / "unattend.img"
+        server.make_floppy(image, "AUTOUNATTEND.XML", xml.encode())
+        self.assertEqual(image.stat().st_size, 1440 * 1024)
+        raw = image.read_bytes()
+        self.assertIn(b"AUTOUN~1XML", raw)
+        self.assertIn(b"<unattend", raw)
+
+    def test_windows_guest_uses_ide_and_e1000(self) -> None:
+        if not has_qemu():
+            self.skipTest("QEMU is not installed")
+        name = "windows-test"
+        (server.VMS / name).mkdir()
+        meta = {
+            "name": name,
+            "os": "windows",
+            "arch": "x86_64",
+            "kind": "disk",
+            "cpus": 2,
+            "memory_mb": 1024,
+            "display": "headless",
+            "ssh_port": server.free_port(22300),
+            "vnc_port": server.free_port(5940),
+            "qmp_port": server.free_port(44700),
+            "uefi": False,
+        }
+        args = server.qemu_args(name, meta)
+        self.assertTrue(any("ide-hd" in arg for arg in args))
+        self.assertTrue(any("e1000" in arg for arg in args))
+        self.assertTrue(any("usb-tablet" in arg for arg in args))
+        self.assertFalse(any("virtio-blk" in arg for arg in args))
+        self.assertFalse(any("virtio-net-pci" in arg for arg in args))
+
+    def test_vm_creation_can_write_an_unattend_floppy(self) -> None:
+        if not has_qemu():
+            self.skipTest("QEMU is not installed")
+        raw = self.root / "base.img"
+        raw.write_bytes(b"\0" * 65536)
+        job = {}
+        server.create_vm("unattend-test", {
+            "image": "custom-disk",
+            "path": str(raw),
+            "start": False,
+            "unattend": True,
+            "cpus": 1,
+            "memory_mb": 512,
+            "display": "headless",
+        }, job)
+        self.assertEqual(job.get("status"), "succeeded", job)
+        meta = server.read_meta("unattend-test")
+        self.assertTrue(meta.get("unattend"))
+        floppy = server.vm_dir("unattend-test") / "unattend" / "autounattend.img"
+        self.assertTrue(floppy.is_file())
+        self.assertEqual(floppy.stat().st_size, 1440 * 1024)
+        self.assertIn(b"AUTOUN~1XML", floppy.read_bytes())
+
     def test_ssh_command_targets_the_guest_user(self) -> None:
         name = "ssh-test"
         (server.VMS / name).mkdir()
