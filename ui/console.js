@@ -80,7 +80,8 @@ function connect() {
     return;
   }
 
-  rfb.background = "#0e0e14";
+  const themeBg = getComputedStyle(document.documentElement).getPropertyValue("--bg-inset").trim();
+  rfb.background = themeBg || "#0e0e14";
   rfb.scaleViewport = true;
   rfb.resizeSession = false;
   rfb.clipViewport = false;
