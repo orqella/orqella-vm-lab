@@ -109,7 +109,7 @@
       if (vm.running) {
         actions.push(`<button data-action="console" data-vm="${esc(vm.name)}">Console</button>`);
         if (vm.os !== "windows" && vm.ssh_command) actions.push(`<button data-action="terminal" data-vm="${esc(vm.name)}">Terminal</button>`);
-        actions.push(`<button data-action="stop" data-vm="${esc(vm.name)}">Stop</button>`);
+        actions.push(`<button data-action="stop" data-vm="${esc(vm.name)}">Stop</button><button class="danger" data-action="force-stop" data-vm="${esc(vm.name)}">Force stop</button>`);
       } else {
         actions.push(`<button data-action="start" data-vm="${esc(vm.name)}">Start</button>`);
       }
@@ -124,11 +124,31 @@
       </article>`;
     }).join("");
     root.querySelectorAll("[data-action]").forEach((button) => {
-      button.onclick = () => action(button.dataset.vm, button.dataset.action);
+      button.onclick = () => action(button.dataset.vm, button.dataset.action, button);
     });
   }
 
-  async function action(name, actionName) {
+  let confirmResolve = null;
+  function confirmAction(title, text, confirmLabel = "Confirm") {
+    return new Promise((resolve) => {
+      $("confirmTitle").textContent = title;
+      $("confirmText").textContent = text;
+      $("confirmOk").textContent = confirmLabel;
+      $("confirmModal").hidden = false;
+      confirmResolve = resolve;
+      $("confirmCancel").focus();
+    });
+  }
+
+  function resolveConfirm(value = false) {
+    if (!confirmResolve) return;
+    const resolve = confirmResolve;
+    confirmResolve = null;
+    $("confirmModal").hidden = true;
+    resolve(value);
+  }
+
+  async function action(name, actionName, button) {
     if (actionName === "console") return openConsole(name);
     if (actionName === "terminal") return openTerminal(name);
     if (actionName === "ssh") {
@@ -139,16 +159,33 @@
       } catch (error) { setStatus(error.message, true); }
       return;
     }
-    if (actionName === "destroy" && !window.confirm(`Delete ${name} and its disk?`)) return;
-    if (actionName === "reset" && !window.confirm(`Reset ${name}? Its disk will be discarded.`)) return;
+    if (actionName === "destroy") {
+      const ok = await confirmAction("Destroy VM", `Delete ${name} and its disk? This cannot be undone.`, "Destroy");
+      if (!ok) return;
+    }
+    if (actionName === "reset") {
+      const ok = await confirmAction("Reset VM", `Reset ${name}? Its disk will be discarded.`, "Reset");
+      if (!ok) return;
+    }
+    const label = actionName === "force-stop" ? "Force stop" : actionName.charAt(0).toUpperCase() + actionName.slice(1);
+    const original = button?.textContent;
+    if (button) {
+      button.disabled = true;
+      if (actionName === "stop" || actionName === "force-stop") button.textContent = "Stopping…";
+    }
     try {
-      setStatus(`${actionName} ${name}…`);
+      setStatus(`${label} ${name}…`);
       const result = await backend("/api/vms/action", "POST", { name, action: actionName });
-      if (result?.ok === false) throw new Error(result.error || `${actionName} failed`);
+      if (result?.ok === false) throw new Error(result.error || `${label} failed`);
       await load();
-      setStatus(`${actionName} ${name} complete`);
+      setStatus(`${label} ${name} complete`);
     } catch (error) {
-      setStatus(error.message || `${actionName} failed`, true);
+      setStatus(error.message || `${label} failed`, true);
+    } finally {
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.textContent = original;
+      }
     }
   }
 
@@ -285,6 +322,14 @@
   $("terminalClose").onclick = () => { $("terminalModal").hidden = true; $("terminalFrame").src = "about:blank"; };
   [["consoleModal", "consoleFrame"], ["terminalModal", "terminalFrame"]].forEach(([modal, frame]) => {
     $(modal).onclick = (event) => { if (event.target === $(modal)) { $(modal).hidden = true; $(frame).src = "about:blank"; } };
+  });
+  $("confirmCancel").onclick = () => resolveConfirm(false);
+  $("confirmOk").onclick = () => resolveConfirm(true);
+  $("confirmModal").onclick = (event) => { if (event.target === $("confirmModal")) resolveConfirm(false); };
+  document.addEventListener("keydown", (event) => {
+    if ($("confirmModal").hidden) return;
+    if (event.key === "Escape") { event.preventDefault(); resolveConfirm(false); }
+    else if (event.key === "Enter") { event.preventDefault(); resolveConfirm(true); }
   });
   window.orqella.ready((ctx) => { context = ctx; load(); });
 })();

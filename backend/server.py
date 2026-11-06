@@ -37,6 +37,7 @@ CATALOG_FILE = DATA / "catalog.json"
 RECIPES = DATA / "recipes"
 AGENT_GUIDE = DATA / "AGENT.md"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+POWERDOWN_GRACE_SECS = 5
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 DEFAULT_CATALOG = [
     {
@@ -590,26 +591,37 @@ def stop_vm(name, force=False):
         stop_seed(name)
         return {"ok": True, "name": name, "state": "stopped"}
     if not force:
+        requested = False
         try:
             qmp(meta.get("qmp_port"), "system_powerdown")
+            requested = True
         except Exception:
             pass
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            if not pid_alive(meta.get("pid")):
-                break
-            time.sleep(0.4)
+        if requested:
+            deadline = time.time() + POWERDOWN_GRACE_SECS
+            while time.time() < deadline:
+                if not pid_alive(meta.get("pid")):
+                    break
+                time.sleep(0.4)
     if pid_alive(meta.get("pid")):
         try:
             qmp(meta.get("qmp_port"), "quit")
         except Exception:
             pass
-        time.sleep(1)
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if not pid_alive(meta.get("pid")):
+                break
+            time.sleep(0.1)
     if pid_alive(meta.get("pid")):
         try:
             os.kill(int(meta["pid"]), 9 if os.name != "nt" else 15)
         except OSError:
             pass
+        for _ in range(20):
+            if not pid_alive(meta.get("pid")):
+                break
+            time.sleep(0.1)
     process = PROCESSES.pop(name, None)
     if process is not None:
         try:
@@ -1165,11 +1177,11 @@ def action_vm(name, action):
     if action == "force-stop":
         return stop_vm(name, force=True)
     if action == "destroy":
-        stop_vm(name)
+        stop_vm(name, force=True)
         shutil.rmtree(vm_dir(name), ignore_errors=True)
         return {"ok": True, "name": name, "state": "destroyed"}
     if action == "reset":
-        stop_vm(name)
+        stop_vm(name, force=True)
         disk = vm_dir(name) / "disk.qcow2"
         if disk.exists():
             disk.unlink()

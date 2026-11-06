@@ -6,7 +6,9 @@ host-specific shell script.
 
 ## What it does
 
-- Lists, creates, starts, stops, resets, and destroys local VMs.
+- Lists, creates, starts, stops, resets, and destroys local VMs. **Stop** asks
+  the guest to shut down and then forces QEMU off after a few seconds;
+  **Force stop** skips the graceful wait.
 - Creates Linux cloud-image VMs with cloud-init, or boots a Linux/Windows ISO
   through the browser console.
 - Windows guests use IDE disks and Intel `e1000` networking so Windows Setup can

@@ -297,6 +297,23 @@ button.danger,
   flex: 1;
 }
 
+.confirm-modal { z-index: 30; }
+.confirm-box {
+  width: min(420px, 92vw);
+  height: auto;
+}
+.confirm-text {
+  margin: 0;
+  padding: 16px 14px;
+  color: var(--ink);
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
 @media (max-width: 720px) {
   .page { padding: 16px 14px 30px; }
   .head { flex-direction: column; }
