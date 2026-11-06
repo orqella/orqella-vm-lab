@@ -587,8 +587,21 @@ def qmp(port, command, timeout=5):
 
 def stop_vm(name, force=False):
     meta = read_meta(name)
-    if not running(meta):
+    process = PROCESSES.get(name)
+
+    def alive():
+        # Popen.poll() reaps an exited child. os.kill(pid, 0) keeps returning
+        # success for a zombie, which made every stop wait out the full grace
+        # period after QEMU had already exited.
+        if process is not None:
+            return process.poll() is None
+        return pid_alive(meta.get("pid"))
+
+    if not alive():
+        PROCESSES.pop(name, None)
         stop_seed(name)
+        meta["pid"] = None
+        write_meta(name, meta)
         return {"ok": True, "name": name, "state": "stopped"}
     if not force:
         requested = False
@@ -600,26 +613,26 @@ def stop_vm(name, force=False):
         if requested:
             deadline = time.time() + POWERDOWN_GRACE_SECS
             while time.time() < deadline:
-                if not pid_alive(meta.get("pid")):
+                if not alive():
                     break
                 time.sleep(0.4)
-    if pid_alive(meta.get("pid")):
+    if alive():
         try:
             qmp(meta.get("qmp_port"), "quit")
         except Exception:
             pass
         deadline = time.time() + 2
         while time.time() < deadline:
-            if not pid_alive(meta.get("pid")):
+            if not alive():
                 break
             time.sleep(0.1)
-    if pid_alive(meta.get("pid")):
+    if alive():
         try:
             os.kill(int(meta["pid"]), 9 if os.name != "nt" else 15)
         except OSError:
             pass
         for _ in range(20):
-            if not pid_alive(meta.get("pid")):
+            if not alive():
                 break
             time.sleep(0.1)
     process = PROCESSES.pop(name, None)
