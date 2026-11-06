@@ -40,11 +40,13 @@ memory, and display settings.
 ## AI-prepared recipes
 
 **Ask AI** next to **New VM** sends a prompt to Orqella's configured default
-agent with the VM Lab data directory as its working root. The agent reads
-`data/AGENT.md`, writes reusable recipes under `data/recipes/`, and can download
-images into `data/images/`. Once a recipe exists it appears in the **Bespoke
-config** selector on the New VM form. Recipes can set the image, CPU/memory,
-disk size, display mode, extra cloud-init YAML, and SSH provisioning commands.
+agent with the VM Lab data directory as its working root. Orqella opens the
+agent's conversation in the configured viewer (OpenCode by default) instead of
+showing a scrolling log. The agent reads `data/AGENT.md`, writes reusable
+recipes under `data/recipes/`, and can download images into `data/images/`. Once
+a recipe exists it appears in the **Bespoke config** selector on the New VM form.
+Recipes can set the image, CPU/memory, disk size, display mode, extra cloud-init
+YAML, and SSH provisioning commands.
 
 ## Catalog
 

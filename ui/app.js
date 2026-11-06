@@ -262,16 +262,26 @@
     const prompt = $("agentPrompt").value.trim();
     if (!prompt) return;
     $("agentRun").disabled = true;
-    $("agentLog").hidden = false;
-    $("agentLog").textContent = "Starting agent…";
-    $("agentStatus").textContent = "working…";
+    $("agentStatus").textContent = "Starting agent…";
     const instruction = `Work in this VM Lab data directory. Read AGENT.md before changing anything. Create a reusable VM recipe according to the user's request.\n\nRequirements:\n- Put the recipe in recipes/<id>.json using the documented schema.\n- Use an existing catalog image id, or define an image URL/path and download it into images/ if needed.\n- Add cloud_init and/or provision commands for guest configuration when appropriate.\n- Keep the recipe portable across Linux, macOS, and Windows hosts where possible; reject macOS guest automation on non-macOS hosts.\n- Do not edit module source files.\n\nAvailable catalog ids: ${images.map((image) => image.id).join(", ") || "none"}.\n\nUser request:\n${prompt}`;
     const knownRecipes = new Set(recipes.map((recipe) => recipe.id));
     try {
       const dataRoot = status.data_root;
       if (!dataRoot) throw new Error("VM Lab data directory is unavailable");
-      const job = await window.orqella.call("agent.start", { prompt: instruction, root: dataRoot });
-      $("agentStatus").textContent = `agent ${job.id.slice(0, 8)} running…`;
+      const job = await window.orqella.hooks.run("agent.prompt", {
+        prompt: instruction,
+        root: dataRoot,
+        open: true,
+        wait_ms: 8000,
+        node: context.node?.id || "local",
+      });
+      if (job.open_error) {
+        $("agentStatus").textContent = `Agent started, but could not open the conversation: ${job.open_error}`;
+      } else if (job.session_id) {
+        $("agentStatus").textContent = "Opened in the conversation viewer.";
+      } else {
+        $("agentStatus").textContent = `agent ${job.id.slice(0, 8)} running…`;
+      }
       pollAgent(job.id, knownRecipes);
     } catch (error) {
       $("agentRun").disabled = false;
@@ -283,8 +293,6 @@
     clearTimeout(agentTimer);
     try {
       const job = await window.orqella.call("agent.status", { id });
-      $("agentLog").textContent = (job.log || "").slice(-10000);
-      $("agentLog").scrollTop = $("agentLog").scrollHeight;
       $("agentStatus").textContent = `${job.status}…`;
       if (job.status === "succeeded") {
         $("agentRun").disabled = false;
