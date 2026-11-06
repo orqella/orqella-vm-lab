@@ -33,8 +33,8 @@
   <section class="summary" id="summary"></section>
   <div class="grid" id="vmList"></div>
   <p class="hint">The web console is VNC over the module bridge. Headless machines still expose their guest console there; SSH is available once the guest is up.</p>
-  <section class="modal" id="consoleModal" hidden><div class="modal-box"><div class="modal-head"><b id="consoleTitle">Console</b><button class="ghost" id="consoleClose" type="button">Close</button></div><iframe id="consoleFrame" title="VM console" sandbox="allow-scripts allow-same-origin"></iframe></div></section>
-  <section class="modal" id="terminalModal" hidden><div class="modal-box"><div class="modal-head"><b id="terminalTitle">Terminal</b><button class="ghost" id="terminalClose" type="button">Close</button></div><iframe id="terminalFrame" title="VM terminal" sandbox="allow-scripts allow-same-origin"></iframe></div></section>
+  <section class="modal" id="consoleModal" hidden><div class="modal-box"><div class="modal-head"><b id="consoleTitle">Console</b><button class="ghost" id="consoleClose" type="button">Close</button></div><iframe id="consoleFrame" title="VM console" allowfullscreen sandbox="allow-scripts allow-same-origin"></iframe></div></section>
+  <section class="modal" id="terminalModal" hidden><div class="modal-box"><div class="modal-head"><b id="terminalTitle">Terminal</b><button class="ghost" id="terminalClose" type="button">Close</button></div><iframe id="terminalFrame" title="VM terminal" allowfullscreen sandbox="allow-scripts allow-same-origin"></iframe></div></section>
   <section class="modal confirm-modal" id="confirmModal" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
     <div class="modal-box confirm-box">
       <div class="modal-head"><b id="confirmTitle">Confirm</b></div>
