@@ -329,7 +329,6 @@
   document.addEventListener("keydown", (event) => {
     if ($("confirmModal").hidden) return;
     if (event.key === "Escape") { event.preventDefault(); resolveConfirm(false); }
-    else if (event.key === "Enter") { event.preventDefault(); resolveConfirm(true); }
   });
   window.orqella.ready((ctx) => { context = ctx; load(); });
 })();
