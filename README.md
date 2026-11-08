@@ -1,8 +1,6 @@
 # VM Lab
 
-A portable QEMU VM manager for Orqella. It brings the Lamprey Deck VM idea to
-Linux, macOS, and Windows without depending on systemd, Hyprland, libvirt, or a
-host-specific shell script.
+A portable QEMU VM manager for Orqella.
 
 ## What it does
 
