@@ -664,11 +664,17 @@ def qemu_args(name, meta):
     else:
         disk_args = ["-drive", f"file={disk},if=virtio,format=qcow2"]
         net_device = "virtio-net-pci"
+    netdev = f"user,id=net0,hostfwd=tcp:127.0.0.1:{meta['ssh_port']}-:22"
+    for forward in meta.get("udp_forwards") or []:
+        host = str(forward.get("host") or "127.0.0.1")
+        host_port = int(forward["host_port"])
+        guest_port = int(forward["guest_port"])
+        netdev += f",hostfwd=udp:{host}:{host_port}-:{guest_port}"
     args += [
         "-smp", str(int(meta.get("cpus") or 2)),
         "-m", str(int(meta.get("memory_mb") or 4096)),
         *disk_args,
-        "-netdev", f"user,id=net0,hostfwd=tcp:127.0.0.1:{meta['ssh_port']}-:22",
+        "-netdev", netdev,
         "-device", f"{net_device},netdev=net0",
         "-vnc", f"127.0.0.1:{int(meta['vnc_port']) - 5900}",
         "-qmp", f"tcp:127.0.0.1:{meta['qmp_port']},server=on,wait=off",

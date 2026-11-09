@@ -72,6 +72,21 @@ The console is available for both modes. For Linux cloud images, cloud-init
 configures the SSH key and user, so the terminal is usable once boot completes.
 Windows terminal support depends on the guest having OpenSSH enabled.
 
+QEMU's default user network forwards TCP SSH only. VM metadata may add UDP
+forwards for guest services that need inbound UDP, such as an Orqella Link
+endpoint on a testbed:
+
+```json
+"udp_forwards": [
+  {"host": "192.168.68.10", "host_port": 7842, "guest_port": 7842}
+]
+```
+
+This creates `hostfwd=udp:<host>:<host_port>-:<guest_port>`. The guest still
+needs to bind the matching port and advertise the host-side address. UDP
+forwards are limited to the configured ports; they are not a general bridged
+LAN connection.
+
 ## Platform notes
 
 QEMU is the common backend, but hardware acceleration is host-dependent:

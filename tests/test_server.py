@@ -87,6 +87,30 @@ class VmLabTests(unittest.TestCase):
         self.assertIn("-vnc", args)
         self.assertIn("-display", args)
 
+    def test_udp_forward_args(self) -> None:
+        if not has_qemu():
+            self.skipTest("QEMU is not installed")
+        name = "udp-test"
+        (server.VMS / name).mkdir()
+        meta = {
+            "name": name,
+            "arch": "x86_64",
+            "kind": "cloud",
+            "cpus": 2,
+            "memory_mb": 1024,
+            "display": "headless",
+            "ssh_port": server.free_port(22300),
+            "vnc_port": server.free_port(5940),
+            "qmp_port": server.free_port(44700),
+            "udp_forwards": [
+                {"host": "192.0.2.10", "host_port": 7842, "guest_port": 7842}
+            ],
+            "uefi": False,
+        }
+        args = server.qemu_args(name, meta)
+        netdev = args[args.index("-netdev") + 1]
+        self.assertIn("hostfwd=udp:192.0.2.10:7842-:7842", netdev)
+
     def test_cloud_args_enable_seed_network(self) -> None:
         if not has_qemu():
             self.skipTest("QEMU is not installed")
