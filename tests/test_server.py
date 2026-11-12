@@ -201,5 +201,150 @@ class VmLabTests(unittest.TestCase):
         self.assertIn("-p 22000", command)
 
 
+class VmLabEdgeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(dir=_TEMP_ROOT.name))
+        server.VMS = self.root / "vms"
+        server.IMAGES = self.root / "images"
+        server.RECIPES = self.root / "recipes"
+        server.DATA = self.root / "data"
+        server.CATALOG_FILE = self.root / "catalog.json"
+        for directory in (server.VMS, server.IMAGES, server.RECIPES, server.DATA):
+            directory.mkdir()
+        server.CATALOG_FILE.write_text(json.dumps(server.DEFAULT_CATALOG), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_recipes_load_valid_entries_and_skip_bad_ones(self) -> None:
+        (server.RECIPES / "demo.json").write_text(
+            json.dumps(
+                {
+                    "name": "Demo",
+                    "image": "ubuntu-24.04",
+                    "cloud_init": "#cloud-config\n",
+                    "provision": ["true"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (server.RECIPES / "bad-name.json").write_text(
+            json.dumps({"id": "../escape", "name": "Bad", "image": "ubuntu-24.04"}),
+            encoding="utf-8",
+        )
+        (server.RECIPES / "invalid.json").write_text("{not json", encoding="utf-8")
+        (server.RECIPES / "missing-image.json").write_text(
+            json.dumps({"id": "missing", "name": "Missing"}), encoding="utf-8"
+        )
+        recipes = server.load_recipes()
+        self.assertEqual([recipe["id"] for recipe in recipes], ["demo"])
+        self.assertEqual(server.recipe_by_id("demo")["name"], "Demo")
+        with self.assertRaises(ValueError):
+            server.recipe_by_id("unknown")
+
+    def test_recipe_images_can_be_catalog_ids_or_custom_objects(self) -> None:
+        image = server.recipe_image({"image": "ubuntu-24.04"})
+        self.assertEqual(image["id"], "ubuntu-24.04")
+        custom = server.recipe_image(
+            {
+                "id": "recipe-x",
+                "name": "Recipe X",
+                "image": {"path": "/tmp/disk.img", "os": "windows"},
+            }
+        )
+        self.assertEqual(custom["id"], "recipe-x")
+        self.assertEqual(custom["os"], "windows")
+        self.assertEqual(custom["cpus"], 2)
+        with self.assertRaises(ValueError):
+            server.recipe_image({"image": 42})
+
+    def test_meta_round_trips_and_missing_vms_are_rejected(self) -> None:
+        server.vm_dir("meta-test").mkdir()
+        server.write_meta("meta-test", {"name": "meta-test", "cpus": 4})
+        self.assertEqual(server.read_meta("meta-test")["cpus"], 4)
+        with self.assertRaises(ValueError):
+            server.read_meta("missing")
+        with self.assertRaises(ValueError):
+            server.read_meta("../escape")
+
+    def test_free_port_skips_a_bound_port(self) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen()
+            occupied = sock.getsockname()[1]
+            self.assertNotEqual(server.free_port(occupied), occupied)
+            self.assertGreater(server.free_port(occupied), occupied)
+
+    def test_catalog_overlays_defaults_and_reports_cache_state(self) -> None:
+        server.CATALOG_FILE.write_text("{not json", encoding="utf-8")
+        self.assertEqual(
+            {item["id"] for item in server.load_catalog()},
+            {item["id"] for item in server.DEFAULT_CATALOG},
+        )
+        server.CATALOG_FILE.write_text(
+            json.dumps([{"id": "custom", "name": "Custom", "kind": "disk"}]),
+            encoding="utf-8",
+        )
+        ids = {item["id"] for item in server.load_catalog()}
+        self.assertIn("custom", ids)
+        self.assertIn("ubuntu-24.04", ids)
+        view = {item["id"]: item for item in server.catalog_view()}
+        self.assertIn("cached", view["custom"])
+        self.assertFalse(view["custom"]["cached"])
+
+    def test_image_source_resolves_relative_paths_and_rejects_missing_files(self) -> None:
+        image = server.DATA / "disk.img"
+        image.write_bytes(b"disk")
+        self.assertEqual(
+            server.image_source({"id": "local", "path": "disk.img"}, print),
+            image,
+        )
+        with self.assertRaises(RuntimeError):
+            server.image_source({"id": "missing", "path": "missing.img"}, print)
+        with self.assertRaises(RuntimeError):
+            server.image_source({"id": "empty"}, print)
+
+    def test_actions_reject_unknown_and_destroy_removes_the_directory(self) -> None:
+        server.vm_dir("action-test").mkdir()
+        server.write_meta("action-test", {"name": "action-test"})
+        with self.assertRaises(ValueError):
+            server.action_vm("action-test", "explode")
+        result = server.action_vm("action-test", "destroy")
+        self.assertTrue(result["ok"])
+        self.assertFalse(server.vm_dir("action-test").exists())
+
+    def test_list_vms_skips_invalid_directories(self) -> None:
+        server.vm_dir("good").mkdir()
+        server.write_meta(
+            "good",
+            {
+                "name": "good",
+                "image": "ubuntu-24.04",
+                "os": "linux",
+                "arch": "x86_64",
+                "kind": "cloud",
+                "display": "headless",
+                "cpus": 2,
+                "memory_mb": 1024,
+                "ssh_port": 2222,
+                "vnc_port": 5920,
+            },
+        )
+        (server.VMS / "bad").mkdir()
+        (server.VMS / "not-a-dir").write_text("x", encoding="utf-8")
+        vms = server.list_vms()
+        self.assertEqual([vm["name"] for vm in vms], ["good"])
+        self.assertFalse(vms[0]["running"])
+        self.assertEqual(vms[0]["disk_bytes"], 0)
+
+    def test_websocket_handshake_and_frame_encoding(self) -> None:
+        self.assertEqual(
+            server.ws_accept("dGhlIHNhbXBsZSBub25jZQ=="),
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+        )
+        self.assertEqual(server.ws_frame(1, b"hi")[:2], bytes([0x81, 2]))
+        self.assertEqual(server.ws_frame(2, b"x" * 65536)[:2], bytes([0x82, 127]))
+
+
 if __name__ == "__main__":
     unittest.main()
