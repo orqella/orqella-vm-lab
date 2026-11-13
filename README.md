@@ -114,6 +114,10 @@ or provision it.
 
 ## Security
 
+QEMU guest memory is allocated by the guest process and is not capped by the
+sidecar `max_memory_mb` policy; plan host memory separately from the sidecar
+limit.
+
 The sidecar runs unsandboxed because it must launch QEMU, manage disks, and
 listen on loopback ports for VNC/SSH. VNC and module websocket routes are
 loopback-only and authenticated by the Orqella module bridge. The VNC server has
