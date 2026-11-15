@@ -85,6 +85,9 @@ class VmLabTests(unittest.TestCase):
         self.assertIn("-cdrom", args)
         self.assertIn(str(iso), args)
         self.assertIn("-vnc", args)
+        self.assertIn("password=on", args[args.index("-vnc") + 1])
+        self.assertIn("-qmp", args)
+        self.assertTrue(args[args.index("-qmp") + 1].startswith("unix:"))
         self.assertIn("-display", args)
 
     def test_udp_forward_args(self) -> None:
@@ -197,8 +200,13 @@ class VmLabTests(unittest.TestCase):
         (server.VMS / name).mkdir()
         meta = {"name": name, "guest_user": "ubuntu", "ssh_port": 22000}
         command = server.ssh_command(meta)
-        self.assertIn("ubuntu@127.0.0.1", command)
+        self.assertIn("-l ubuntu", command)
+        self.assertIn("127.0.0.1", command)
         self.assertIn("-p 22000", command)
+        self.assertEqual(
+            server.ssh_command({"name": name, "guest_user": "-oProxyCommand=id", "ssh_port": 22}),
+            "",
+        )
 
 
 class VmLabEdgeTests(unittest.TestCase):
@@ -338,12 +346,59 @@ class VmLabEdgeTests(unittest.TestCase):
         self.assertEqual(vms[0]["disk_bytes"], 0)
 
     def test_websocket_handshake_and_frame_encoding(self) -> None:
+        import io
+
         self.assertEqual(
             server.ws_accept("dGhlIHNhbXBsZSBub25jZQ=="),
             "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
         )
         self.assertEqual(server.ws_frame(1, b"hi")[:2], bytes([0x81, 2]))
         self.assertEqual(server.ws_frame(2, b"x" * 65536)[:2], bytes([0x82, 127]))
+
+        handler = server.Handler.__new__(server.Handler)
+        handler.rfile = io.BytesIO(bytes([0x82, 0xFE, 0x00]))
+        self.assertEqual(handler.ws_read(), (None, b""))
+
+    def test_image_source_rejects_traversal_and_cleans_partial_download(self) -> None:
+        with self.assertRaises(ValueError):
+            server.image_source({"id": "../escape", "url": "https://example.invalid/a.img"}, print)
+
+        class BrokenResponse:
+            headers = {"Content-Length": "100"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _n):
+                raise OSError("network dropped")
+
+        with __import__("unittest.mock").mock.patch.object(
+            server.urllib.request, "urlopen", return_value=BrokenResponse()
+        ):
+            with self.assertRaises(OSError):
+                server.image_source(
+                    {"id": "ubuntu-24.04", "url": "https://example.invalid/a.img", "file": "a.img"},
+                    print,
+                )
+        self.assertFalse((server.IMAGES / "ubuntu-24.04" / "a.img").exists())
+        self.assertEqual(list((server.IMAGES / "ubuntu-24.04").glob("*.part")), [])
+
+    def test_qemu_args_validates_udp_forwards(self) -> None:
+        server.vm_dir("udp-bad").mkdir()
+        with self.assertRaises(ValueError):
+            server.qemu_args(
+                "udp-bad",
+                {
+                    "arch": "x86_64",
+                    "ssh_port": 22000,
+                    "vnc_port": 5910,
+                    "qmp_port": 44400,
+                    "udp_forwards": [{"host": "127.0.0.1,evil=1", "host_port": 7841, "guest_port": 7841}],
+                },
+            )
 
 
 if __name__ == "__main__":

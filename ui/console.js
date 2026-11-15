@@ -52,6 +52,16 @@ function showFatal(title, text) {
   showOverlay(title, text, false);
 }
 
+async function loadVncPassword() {
+  try {
+    const result = await window.orqella.call("backend.request", { method: "GET", path: "/api/vms" });
+    const info = (result.vms || []).find((item) => item.name === vm);
+    return info?.vnc_password || "";
+  } catch (_) {
+    return "";
+  }
+}
+
 function connect() {
   if (!vm) {
     showFatal("No VM selected", "Open this console from a VM card in VM Lab.");
@@ -119,8 +129,9 @@ function connect() {
     retryDelay = Math.min(retryDelay * 1.6, 8000);
   });
 
-  rfb.addEventListener("credentialsrequired", () => {
-    const password = window.prompt("VNC password (local VMs normally do not use one):");
+  rfb.addEventListener("credentialsrequired", async () => {
+    const stored = await loadVncPassword();
+    const password = stored || window.prompt("VNC password:");
     if (password !== null) {
       try { rfb.sendCredentials({ password }); } catch (_) {}
     }

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import platform
 import re
+import secrets
+import shlex
 import shutil
 import socket
 import ssl
@@ -37,6 +40,16 @@ CATALOG_FILE = DATA / "catalog.json"
 RECIPES = DATA / "recipes"
 AGENT_GUIDE = DATA / "AGENT.md"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+GUEST_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
+
+
+def validate_guest_user(value, label="guest user"):
+    user = str(value or "").strip()
+    if not user:
+        return ""
+    if not GUEST_USER_RE.fullmatch(user):
+        raise ValueError(f"invalid {label}")
+    return user
 POWERDOWN_GRACE_SECS = 5
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 DEFAULT_CATALOG = [
@@ -501,29 +514,75 @@ def image_source(item, job_log):
     if path_value:
         path = Path(path_value).expanduser()
         if not path.is_absolute():
-            path = DATA / path
+            path = (DATA / path).resolve()
+            if not path.is_relative_to(DATA.resolve()):
+                raise RuntimeError(f"image path escapes the VM Lab data directory: {path_value}")
+        else:
+            path = path.resolve()
         if not path.is_file():
             raise RuntimeError(f"image path does not exist: {path}")
+        if path.suffix.lower() not in {
+            ".iso",
+            ".img",
+            ".qcow2",
+            ".raw",
+            ".vhd",
+            ".vmdk",
+            ".vdi",
+            ".fd",
+            ".bin",
+        }:
+            raise RuntimeError("image paths must point at an ISO or disk image file")
+        home = Path.home().resolve()
+        if path.is_relative_to(home):
+            relative = path.relative_to(home).as_posix().lower()
+            for sensitive in (
+                ".ssh",
+                ".gnupg",
+                ".aws",
+                ".azure",
+                ".docker",
+                ".kube",
+                ".config/orqella",
+                ".local/share/orqella",
+            ):
+                if relative == sensitive or relative.startswith(f"{sensitive}/"):
+                    raise RuntimeError("image path points at a credential directory")
         return path
     if item.get("url"):
-        target = IMAGES / str(item["id"]) / str(item.get("file") or "image.qcow2")
+        image_id = str(item.get("id") or "").strip()
+        filename = Path(str(item.get("file") or "image.qcow2")).name
+        if not NAME_RE.match(image_id) or filename in {"", ".", ".."}:
+            raise ValueError("invalid image cache target")
+        parsed_url = urlparse(str(item["url"]))
+        if parsed_url.scheme not in {"http", "https"}:
+            raise ValueError("image URLs must use http:// or https://")
+        target = (IMAGES / image_id / filename).resolve()
+        if not target.is_relative_to(IMAGES.resolve()):
+            raise ValueError("image cache target escapes images directory")
         if target.is_file() and target.stat().st_size > 0:
             return target
         target.parent.mkdir(parents=True, exist_ok=True)
+        part = target.with_name(f".{target.name}.{uuidlib.uuid4().hex[:8]}.part")
         job_log(f"Downloading {item.get('name') or item['id']}…")
         request = urllib.request.Request(str(item["url"]), headers={"User-Agent": "Orqella-VM-Lab/0.1"})
-        with urllib.request.urlopen(request, timeout=60) as response, target.open("wb") as handle:
-            total = int(response.headers.get("Content-Length") or 0)
-            done = 0
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                done += len(chunk)
-                if total:
-                    job_log(f"{target.name}: {done * 100 // total}%")
-        return target
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response, part.open("wb") as handle:
+                total = int(response.headers.get("Content-Length") or 0)
+                done = 0
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    done += len(chunk)
+                    if total:
+                        job_log(f"{target.name}: {done * 100 // total}%")
+            os.replace(part, target)
+            return target
+        except Exception:
+            part.unlink(missing_ok=True)
+            raise
     raise RuntimeError("this catalog image needs a local path or URL")
 
 
@@ -533,6 +592,8 @@ def start_seed(name, meta):
     meta_data = seed_dir / "meta-data"
     if not user_data.is_file():
         return None
+    token = str(meta.get("seed_token") or secrets.token_urlsafe(18))
+    meta["seed_token"] = token
     port = int(meta.get("seed_port") or 0) or free_port(18080)
     meta["seed_port"] = port
     write_meta(name, meta)
@@ -542,7 +603,13 @@ def start_seed(name, meta):
             pass
 
         def do_GET(self):
-            filename = self.path.split("?", 1)[0].lstrip("/")
+            raw = self.path.split("?", 1)[0].lstrip("/")
+            prefix = f"seed/{token}/"
+            if not raw.startswith(prefix):
+                self.send_response(404)
+                self.end_headers()
+                return
+            filename = raw[len(prefix):]
             path = seed_dir / filename
             if filename not in {"user-data", "meta-data", "vendor-data"} or not path.is_file():
                 self.send_response(404)
@@ -573,15 +640,51 @@ def stop_seed(name):
             pass
 
 
-def qmp(port, command, timeout=5):
-    with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as sock:
+def qmp_socket(name):
+    return vm_dir(str(name)) / "qmp.sock"
+
+
+def qmp_socket_supported():
+    return os.name != "nt"
+
+
+def qemu_qmp_arg(name, meta):
+    if qmp_socket_supported():
+        return f"unix:{qmp_socket(name)},server=on,wait=off"
+    # QEMU on Windows has no Unix-domain QMP socket. This remains a loopback
+    # TCP endpoint and is a documented Windows-only residual risk.
+    return f"tcp:127.0.0.1:{int(meta.get('qmp_port') or free_port(44400))},server=on,wait=off"
+
+
+def qmp_target(name, meta):
+    sock = qmp_socket(name)
+    if sock.exists():
+        return sock
+    port = meta.get("qmp_port")
+    return port if port else sock
+
+
+def qmp(target, command, arguments=None, timeout=5):
+    """Send one QMP command. `target` is a Unix socket path for new VMs or a
+    legacy TCP port for VMs started before the socket migration."""
+    text = str(target)
+    if text.isdigit():
+        sock = socket.create_connection(("127.0.0.1", int(text)), timeout=timeout)
+    else:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(text)
+    with sock:
         stream = sock.makefile("rwb", buffering=0)
         greeting = stream.readline()
         if not greeting:
             raise RuntimeError("QMP did not greet")
         stream.write(json.dumps({"execute": "qmp_capabilities"}).encode() + b"\n")
         stream.readline()
-        stream.write(json.dumps({"execute": command}).encode() + b"\n")
+        payload = {"execute": command}
+        if arguments is not None:
+            payload["arguments"] = arguments
+        stream.write(json.dumps(payload).encode() + b"\n")
         return stream.readline().decode(errors="replace")
 
 
@@ -606,7 +709,7 @@ def stop_vm(name, force=False):
     if not force:
         requested = False
         try:
-            qmp(meta.get("qmp_port"), "system_powerdown")
+            qmp(qmp_target(name, meta), "system_powerdown")
             requested = True
         except Exception:
             pass
@@ -618,7 +721,7 @@ def stop_vm(name, force=False):
                 time.sleep(0.4)
     if alive():
         try:
-            qmp(meta.get("qmp_port"), "quit")
+            qmp(qmp_target(name, meta), "quit")
         except Exception:
             pass
         deadline = time.time() + 2
@@ -666,9 +769,13 @@ def qemu_args(name, meta):
         net_device = "virtio-net-pci"
     netdev = f"user,id=net0,hostfwd=tcp:127.0.0.1:{meta['ssh_port']}-:22"
     for forward in meta.get("udp_forwards") or []:
-        host = str(forward.get("host") or "127.0.0.1")
+        host = str(forward.get("host") or "127.0.0.1").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", host):
+            raise ValueError("invalid UDP forward host")
         host_port = int(forward["host_port"])
         guest_port = int(forward["guest_port"])
+        if not (1 <= host_port <= 65535 and 1 <= guest_port <= 65535):
+            raise ValueError("invalid UDP forward port")
         netdev += f",hostfwd=udp:{host}:{host_port}-:{guest_port}"
     args += [
         "-smp", str(int(meta.get("cpus") or 2)),
@@ -676,8 +783,8 @@ def qemu_args(name, meta):
         *disk_args,
         "-netdev", netdev,
         "-device", f"{net_device},netdev=net0",
-        "-vnc", f"127.0.0.1:{int(meta['vnc_port']) - 5900}",
-        "-qmp", f"tcp:127.0.0.1:{meta['qmp_port']},server=on,wait=off",
+        "-vnc", f"127.0.0.1:{int(meta['vnc_port']) - 5900},password=on",
+        "-qmp", qemu_qmp_arg(name, meta),
         "-pidfile", str(vm_dir(name) / "qemu.pid"),
         "-device", "qemu-xhci",
         "-device", "usb-tablet",
@@ -700,7 +807,10 @@ def qemu_args(name, meta):
     if meta.get("unattend") and (vm_dir(name) / "unattend" / "autounattend.img").is_file():
         args += ["-drive", f"file={vm_dir(name) / 'unattend' / 'autounattend.img'},if=floppy,format=raw"]
     if meta.get("kind") == "cloud" and meta.get("seed_port"):
-        args += ["-smbios", f"type=1,serial=ds=nocloud-net;s=http://10.0.2.2:{meta['seed_port']}/"]
+        args += [
+            "-smbios",
+            f"type=1,serial=ds=nocloud-net;s=http://10.0.2.2:{meta['seed_port']}/seed/{meta.get('seed_token')}/",
+        ]
     return args
 
 
@@ -715,11 +825,14 @@ def start_vm(name, force_display=None):
         raise RuntimeError(f"base image is missing: {base}")
     meta["ssh_port"] = int(meta.get("ssh_port") or free_port(22000))
     meta["vnc_port"] = int(meta.get("vnc_port") or free_port(5910))
+    meta["vnc_password"] = str(meta.get("vnc_password") or secrets.token_urlsafe(12))
     meta["qmp_port"] = int(meta.get("qmp_port") or free_port(44400))
     if force_display:
         meta["display"] = force_display
     if meta.get("kind") == "cloud":
         start_seed(name, meta)
+    if qmp_socket_supported():
+        qmp_socket(name).unlink(missing_ok=True)
     args = qemu_args(name, meta)
     log_path = vm_dir(name) / "qemu.log"
     log = log_path.open("ab")
@@ -742,6 +855,22 @@ def start_vm(name, force_display=None):
     meta["started_at"] = int(time.time())
     write_meta(name, meta)
     time.sleep(1.2)
+    if qmp_socket_supported():
+        for _ in range(50):
+            try:
+                os.chmod(qmp_socket(name), 0o600)
+                break
+            except OSError:
+                time.sleep(0.1)
+    try:
+        qmp(
+            qmp_target(name, meta),
+            "set_password",
+            {"protocol": "vnc", "password": meta["vnc_password"]},
+        )
+    except Exception as error:  # noqa: BLE001 - startup continues; console may be unavailable
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"could not set VNC password: {error}\n")
     if process.poll() is not None:
         stop_seed(name)
         tail = log_path.read_text(errors="replace")[-3000:] if log_path.exists() else ""
@@ -994,17 +1123,32 @@ def prepare_disk(name, image, base_path, job_log):
 
 
 
-def ssh_base(meta):
+def ssh_base(meta, tty=False):
+    user = validate_guest_user(meta.get("guest_user"))
+    if not user:
+        raise ValueError("this VM has no SSH user")
     directory = vm_dir(str(meta.get("name")))
-    return [
-        shutil.which("ssh") or "ssh", "-i", str(directory / "id_ed25519"),
-        "-p", str(meta.get("ssh_port")),
-        "-o", "BatchMode=yes",
-        "-o", "IdentitiesOnly=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", f"UserKnownHostsFile={directory / 'known_hosts'}",
-        f"{meta.get('guest_user')}@127.0.0.1",
+    command = [
+        shutil.which("ssh") or "ssh",
+        "-i",
+        str(directory / "id_ed25519"),
+        "-p",
+        str(meta.get("ssh_port")),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"UserKnownHostsFile={directory / 'known_hosts'}",
+        "-l",
+        user,
     ]
+    if tty:
+        command.insert(1, "-tt")
+    command.append("127.0.0.1")
+    return command
 
 
 def run_provision(meta, commands, log):
@@ -1068,7 +1212,10 @@ def create_vm(name, payload, job):
         image = dict(image)
         image["path"] = path_override
     unattend = bool(payload.get("unattend"))
-    unattend_user = str(payload.get("windows_user") or "orqella").strip() or "orqella"
+    unattend_user = validate_guest_user(
+        str(payload.get("windows_user") or "orqella").strip() or "orqella",
+        "Windows user",
+    )
     unattend_password = str(payload.get("windows_password") or "orqella")
     job["status"] = "running"
     job["log"] = ""
@@ -1094,7 +1241,7 @@ def create_vm(name, payload, job):
             "kind": image.get("kind") or "disk",
             "base_image": str(base_path) if image.get("kind") != "iso" else None,
             "iso": str(base_path) if image.get("kind") == "iso" else None,
-            "guest_user": image.get("user") or "",
+            "guest_user": validate_guest_user(image.get("user") or "", "image user"),
             "cpus": cpus,
             "memory_mb": memory,
             "display": display,
@@ -1104,6 +1251,7 @@ def create_vm(name, payload, job):
             "uefi": bool(image.get("uefi")),
             "ssh_port": ssh_port,
             "vnc_port": vnc_port,
+            "vnc_password": secrets.token_urlsafe(12),
             "qmp_port": free_port(44400),
             "uuid": str(uuidlib.uuid4()),
             "created": int(time.time()),
@@ -1120,7 +1268,7 @@ def create_vm(name, payload, job):
             if not meta.get("guest_user"):
                 meta["guest_user"] = unattend_user
             write_windows_unattend(name, meta, unattend_user, unattend_password)
-            log(f"Unattended install configured for {unattend_user} (password: {unattend_password}).")
+            log(f"Unattended install configured for {unattend_user}.")
         write_meta(name, meta)
         if meta["kind"] == "iso":
             log("Installer ISO attached. Install through the web console, then use Finish install before rebooting.")
@@ -1169,6 +1317,7 @@ def list_vms():
             "created": meta.get("created"),
             "ssh_port": meta.get("ssh_port"),
             "vnc_port": meta.get("vnc_port"),
+            "vnc_password": meta.get("vnc_password") or "",
             "ssh_command": ssh_command(meta) if alive else "",
             "disk_bytes": disk.stat().st_size if disk.is_file() else 0,
         })
@@ -1178,13 +1327,28 @@ def list_vms():
 def ssh_command(meta):
     if not meta.get("guest_user"):
         return ""
+    try:
+        user = validate_guest_user(meta.get("guest_user"))
+    except ValueError:
+        return ""
     directory = vm_dir(str(meta.get("name")))
-    return (
-        f"ssh -i {directory / 'id_ed25519'} -p {meta.get('ssh_port')} "
-        f"-o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "
-        f"-o UserKnownHostsFile={directory / 'known_hosts'} "
-        f"{meta.get('guest_user')}@127.0.0.1"
-    )
+    command = [
+        "ssh",
+        "-i",
+        str(directory / "id_ed25519"),
+        "-p",
+        str(meta.get("ssh_port")),
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"UserKnownHostsFile={directory / 'known_hosts'}",
+        "-l",
+        user,
+        "127.0.0.1",
+    ]
+    return shlex.join(command)
 
 
 def action_vm(name, action):
@@ -1255,16 +1419,25 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def authorized(self):
-        if self.headers.get("X-Orqella-Module-Token") == TOKEN:
+        supplied = self.headers.get("X-Orqella-Module-Token") or ""
+        if TOKEN and hmac.compare_digest(supplied, TOKEN):
             return True
         self.send_json(401, {"error": "unauthorized"})
         return False
 
     def read_json(self):
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
         if length <= 0:
             return {}
-        return json.loads(self.rfile.read(length) or b"{}")
+        if length > 2 * 1024 * 1024:
+            raise ValueError("request body too large")
+        value = json.loads(self.rfile.read(length) or b"{}")
+        if not isinstance(value, dict):
+            raise ValueError("JSON object required")
+        return value
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -1360,22 +1533,43 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         self.close_connection = True
 
+    def _read_exact(self, count):
+        if count <= 0:
+            return b""
+        buf = bytearray()
+        while len(buf) < count:
+            chunk = self.rfile.read(count - len(buf))
+            if not chunk:
+                return None
+            buf.extend(chunk)
+        return bytes(buf)
+
     def ws_read(self):
-        head = self.rfile.read(2)
-        if len(head) < 2:
+        head = self._read_exact(2)
+        if head is None:
             return None, b""
         opcode = head[0] & 0x0F
         masked = bool(head[1] & 0x80)
         size = head[1] & 0x7F
         if size == 126:
-            size = struct.unpack("!H", self.rfile.read(2))[0]
+            ext = self._read_exact(2)
+            if ext is None:
+                return None, b""
+            size = struct.unpack("!H", ext)[0]
         elif size == 127:
-            size = struct.unpack("!Q", self.rfile.read(8))[0]
+            ext = self._read_exact(8)
+            if ext is None:
+                return None, b""
+            size = struct.unpack("!Q", ext)[0]
         if size > 4 * 1024 * 1024:
             raise ValueError("websocket frame too large")
-        mask = self.rfile.read(4) if masked else b""
-        data = self.rfile.read(size)
-        if masked:
+        mask = self._read_exact(4) if masked else b""
+        if mask is None:
+            return None, b""
+        data = self._read_exact(size)
+        if data is None:
+            return None, b""
+        if masked and mask:
             data = bytes(byte ^ mask[i % 4] for i, byte in enumerate(data))
         return opcode, data
 
@@ -1428,15 +1622,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(ws_frame(0x1, b"SSH terminal is not available for this VM.\r\n"))
             self.wfile.write(ws_frame(0x8, b""))
             return
-        command = [
-            ssh, "-tt",
-            "-i", str(vm_dir(str(meta.get("name"))) / "id_ed25519"),
-            "-p", str(meta.get("ssh_port")),
-            "-o", "IdentitiesOnly=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", f"UserKnownHostsFile={vm_dir(str(meta.get('name'))) / 'known_hosts'}",
-            f"{meta.get('guest_user')}@127.0.0.1",
-        ]
+        try:
+            command = ssh_base(meta, tty=True)
+        except ValueError as error:
+            self.wfile.write(ws_frame(0x1, f"SSH terminal is not available: {error}\r\n".encode()))
+            self.wfile.write(ws_frame(0x8, b""))
+            return
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         lock = threading.Lock()
 
