@@ -30,6 +30,66 @@ let composing = false;
 let stopped = false;
 let retryTimer = null;
 let retryDelay = 1200;
+let passwordResolve = null;
+let nestSequence = 0;
+const nestPending = new Map();
+
+window.addEventListener("message", (event) => {
+  if (event.source !== parent) return;
+  const message = event.data;
+  if (!message || message.type !== "orqella:response" || !message.id) return;
+  const pending = nestPending.get(message.id);
+  if (!pending) return;
+  nestPending.delete(message.id);
+  clearTimeout(pending.timer);
+  if (message.ok) pending.resolve(message.result);
+  else pending.reject(new Error(message.error || "request failed"));
+});
+
+function nestCall(method, params = {}) {
+  const id = `n${++nestSequence}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      nestPending.delete(id);
+      reject(new Error("VM Lab page did not answer"));
+    }, 15000);
+    nestPending.set(id, { resolve, reject, timer });
+    parent.postMessage({ type: "orqella:request", id, method, params }, "*");
+  });
+}
+
+function askVncPassword() {
+  return new Promise((resolve) => {
+    passwordResolve = resolve;
+    const dialog = document.getElementById("passwordRequest");
+    const input = document.getElementById("vncPasswordInput");
+    dialog.hidden = false;
+    input.value = "";
+    input.focus();
+  });
+}
+
+function finishPassword(value) {
+  if (!passwordResolve) return;
+  const resolve = passwordResolve;
+  passwordResolve = null;
+  document.getElementById("passwordRequest").hidden = true;
+  document.getElementById("vncPasswordInput").value = "";
+  resolve(value);
+}
+
+document.getElementById("vncPasswordCancel").addEventListener("click", () => finishPassword(null));
+document.getElementById("vncPasswordOk").addEventListener("click", () => finishPassword(document.getElementById("vncPasswordInput").value));
+document.getElementById("vncPasswordInput").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    finishPassword(document.getElementById("vncPasswordInput").value);
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    finishPassword(null);
+  }
+});
 
 function setState(text) {
   stateEl.textContent = text;
@@ -54,7 +114,7 @@ function showFatal(title, text) {
 
 async function loadVncPassword() {
   try {
-    const result = await window.orqella.call("backend.request", { method: "GET", path: "/api/vms" });
+    const result = await nestCall("backend.request", { method: "GET", path: "/api/vms" });
     const info = (result.vms || []).find((item) => item.name === vm);
     return info?.vnc_password || "";
   } catch (_) {
@@ -131,7 +191,7 @@ function connect() {
 
   rfb.addEventListener("credentialsrequired", async () => {
     const stored = await loadVncPassword();
-    const password = stored || window.prompt("VNC password:");
+    const password = stored || await askVncPassword();
     if (password !== null) {
       try { rfb.sendCredentials({ password }); } catch (_) {}
     }

@@ -13,6 +13,55 @@
     ...(body !== undefined ? { body } : {}),
   });
 
+  function nestedFrame(source) {
+    return [$("consoleFrame"), $("terminalFrame")].find(
+      (frame) => frame && frame.contentWindow === source,
+    ) || null;
+  }
+
+  function nestedFrameUrl(url) {
+    const token = context?.ws_token || "";
+    if (!token) return url;
+    const separator = url.includes("#") ? "&" : "#";
+    return `${url}${separator}__orqella_ws=${encodeURIComponent(token)}`;
+  }
+
+  function initNestedFrame(frame) {
+    if (!frame?.contentWindow) return;
+    frame.contentWindow.postMessage(
+      { type: "orqella:init", context: { ...(context || {}), surface: "page" } },
+      "*",
+    );
+  }
+
+  function initAllNestedFrames() {
+    for (const id of ["consoleFrame", "terminalFrame"]) initNestedFrame($(id));
+  }
+
+  window.addEventListener("message", async (event) => {
+    const frame = nestedFrame(event.source);
+    if (!frame) return;
+    const message = event.data;
+    if (!message || typeof message !== "object") return;
+    if (message.type === "orqella:frame-ready") {
+      initNestedFrame(frame);
+      return;
+    }
+    if (message.type !== "orqella:request") return;
+    const id = message.id;
+    try {
+      const result = await window.orqella.call(message.method, message.params || {});
+      frame.contentWindow.postMessage({ type: "orqella:response", id, ok: true, result }, "*");
+    } catch (error) {
+      frame.contentWindow.postMessage({
+        type: "orqella:response",
+        id,
+        ok: false,
+        error: String(error?.message || error || "request failed"),
+      }, "*");
+    }
+  });
+
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
@@ -191,13 +240,13 @@
 
   function openConsole(name) {
     $("consoleTitle").textContent = `${name} · console`;
-    $("consoleFrame").src = `console.html?name=${encodeURIComponent(name)}`;
+    $("consoleFrame").src = nestedFrameUrl(`console.html?name=${encodeURIComponent(name)}`);
     $("consoleModal").hidden = false;
   }
 
   function openTerminal(name) {
     $("terminalTitle").textContent = `${name} · terminal`;
-    $("terminalFrame").src = `terminal.html?name=${encodeURIComponent(name)}`;
+    $("terminalFrame").src = nestedFrameUrl(`terminal.html?name=${encodeURIComponent(name)}`);
     $("terminalModal").hidden = false;
   }
 
@@ -216,6 +265,8 @@
       display: $("vmDisplay").value,
       path,
       unattend: $("vmUnattend").checked,
+      windows_password: $("vmPassword").value,
+      allow_lan_forwards: false,
       start: true,
     };
     $("createButton").disabled = true;
@@ -323,6 +374,7 @@
   $("refresh").onclick = () => load();
   $("vmImage").onchange = renderImages;
   $("vmRecipe").onchange = applyRecipe;
+  $("vmUnattend").onchange = () => { $("passwordRow").hidden = !$("vmUnattend").checked; };
   $("askAi").onclick = () => { $("agentPanel").hidden = !$("agentPanel").hidden; if (!$("agentPanel").hidden) $("agentPrompt").focus(); };
   $("agentRun").onclick = runAgent;
   $("createForm").onsubmit = create;
@@ -338,5 +390,13 @@
     if ($("confirmModal").hidden) return;
     if (event.key === "Escape") { event.preventDefault(); resolveConfirm(false); }
   });
-  window.orqella.ready((ctx) => { context = ctx; load(); });
+  window.orqella.ready((ctx) => {
+    context = ctx;
+    initAllNestedFrames();
+    window.orqella.onContext((next) => {
+      context = next || context;
+      initAllNestedFrames();
+    });
+    load();
+  });
 })();

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -95,6 +96,9 @@ class VmLabTests(unittest.TestCase):
             self.skipTest("QEMU is not installed")
         name = "udp-test"
         (server.VMS / name).mkdir()
+        seed = server.VMS / name / "seed"
+        seed.mkdir()
+        (seed / "seed.img").write_bytes(b"\0" * 1024)
         meta = {
             "name": name,
             "arch": "x86_64",
@@ -105,6 +109,7 @@ class VmLabTests(unittest.TestCase):
             "ssh_port": server.free_port(22300),
             "vnc_port": server.free_port(5940),
             "qmp_port": server.free_port(44700),
+            "allow_lan_forwards": True,
             "udp_forwards": [
                 {"host": "192.0.2.10", "host_port": 7842, "guest_port": 7842}
             ],
@@ -119,6 +124,9 @@ class VmLabTests(unittest.TestCase):
             self.skipTest("QEMU is not installed")
         name = "cloud-test"
         (server.VMS / name).mkdir()
+        seed = server.VMS / name / "seed"
+        seed.mkdir()
+        (seed / "seed.img").write_bytes(b"\0" * 1024)
         meta = {
             "name": name,
             "arch": "x86_64",
@@ -129,11 +137,10 @@ class VmLabTests(unittest.TestCase):
             "ssh_port": server.free_port(22200),
             "vnc_port": server.free_port(5930),
             "qmp_port": server.free_port(44600),
-            "seed_port": 18080,
             "uefi": False,
         }
         args = server.qemu_args(name, meta)
-        self.assertTrue(any("nocloud-net" in value for value in args))
+        self.assertTrue(any("seed.img" in value for value in args))
 
     def test_unattend_floppy_and_xml(self) -> None:
         xml = server.windows_unattend_xml("win-test", False, "orqella", "orqella")
@@ -193,7 +200,12 @@ class VmLabTests(unittest.TestCase):
         floppy = server.vm_dir("unattend-test") / "unattend" / "autounattend.img"
         self.assertTrue(floppy.is_file())
         self.assertEqual(floppy.stat().st_size, 1440 * 1024)
+        self.assertEqual(floppy.stat().st_mode & 0o777, 0o600)
         self.assertIn(b"AUTOUN~1XML", floppy.read_bytes())
+        self.assertNotEqual(meta.get("unattend_password"), "orqella")
+        self.assertEqual(server.meta_path("unattend-test").stat().st_mode & 0o777, 0o600)
+        xml = server.vm_dir("unattend-test") / "unattend" / "autounattend.xml"
+        self.assertEqual(xml.stat().st_mode & 0o777, 0o600)
 
     def test_ssh_command_targets_the_guest_user(self) -> None:
         name = "ssh-test"
@@ -399,6 +411,87 @@ class VmLabEdgeTests(unittest.TestCase):
                     "udp_forwards": [{"host": "127.0.0.1,evil=1", "host_port": 7841, "guest_port": 7841}],
                 },
             )
+
+    def test_udp_forwards_require_lan_opt_in(self) -> None:
+        if not has_qemu():
+            self.skipTest("QEMU is not installed")
+        server.vm_dir("udp-lan").mkdir()
+        meta = {
+            "arch": "x86_64",
+            "ssh_port": server.free_port(22800),
+            "vnc_port": server.free_port(5980),
+            "qmp_port": server.free_port(44800),
+            "udp_forwards": [{"host": "192.0.2.10", "host_port": 7842, "guest_port": 7842}],
+        }
+        with self.assertRaises(ValueError):
+            server.qemu_args("udp-lan", meta)
+        meta["allow_lan_forwards"] = True
+        args = server.qemu_args("udp-lan", meta)
+        netdev = args[args.index("-netdev") + 1]
+        self.assertIn("hostfwd=udp:192.0.2.10:7842-:7842", netdev)
+
+    def test_metadata_is_private_and_atomic(self) -> None:
+        server.vm_dir("meta-private").mkdir()
+        server.write_meta("meta-private", {"name": "meta-private", "vnc_password": "secret"})
+        path = server.meta_path("meta-private")
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(server.read_meta("meta-private")["vnc_password"], "secret")
+
+    def test_process_identity_rejects_non_qemu(self) -> None:
+        start = server._process_start_time(os.getpid())
+        if not start:
+            self.skipTest("process start time is unavailable on this host")
+        self.assertTrue(server.pid_alive(os.getpid()))
+        self.assertFalse(server.expected_process({"pid": os.getpid(), "pid_start": start, "name": "demo"}))
+
+    def test_port_allocator_reserves_unique_ports(self) -> None:
+        first = server.allocate_port(23000, "port-a")
+        second = server.allocate_port(23000, "port-b")
+        try:
+            self.assertNotEqual(first, second)
+            self.assertTrue(server.claim_port(first, "port-a"))
+            self.assertFalse(server.claim_port(first, "port-b"))
+        finally:
+            server.release_vm_ports("port-a")
+            server.release_vm_ports("port-b")
+
+    def test_image_source_verifies_optional_sha256(self) -> None:
+        image = server.DATA / "hashed.img"
+        image.write_bytes(b"disk-image")
+        import hashlib
+        digest = hashlib.sha256(b"disk-image").hexdigest()
+        self.assertEqual(
+            server.image_source({"id": "hashed", "path": "hashed.img", "sha256": digest}, print),
+            image,
+        )
+        with self.assertRaises(RuntimeError):
+            server.image_source({"id": "hashed", "path": "hashed.img", "sha256": "0" * 64}, print)
+
+    def test_qmp_target_uses_a_unix_socket(self) -> None:
+        if server.qmp_socket_supported():
+            target = server.qmp_target("qmp-test", {"qmp_port": 44444})
+            self.assertTrue(str(target).endswith("qmp.sock"))
+
+    def test_nested_console_frames_relay_the_module_sdk(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        app = (root / "ui" / "app.js").read_text(encoding="utf-8")
+        console = (root / "ui" / "console.js").read_text(encoding="utf-8")
+        self.assertIn("__orqella_ws", app)
+        self.assertIn("orqella:request", app)
+        self.assertIn("orqella:init", app)
+        self.assertIn("nestedFrameUrl", app)
+        self.assertIn("nestCall", console)
+        self.assertNotIn("window.prompt", console)
+
+    def test_floppy_image_passes_fat_check_when_available(self) -> None:
+        tool = shutil.which("fsck.fat")
+        if not tool:
+            self.skipTest("fsck.fat is not installed")
+        xml = server.windows_unattend_xml("floppy-test", False, "orqella", "secret")
+        image = self.root / "check.img"
+        server.make_floppy(image, "AUTOUNATTEND.XML", xml.encode())
+        result = subprocess.run([tool, "-n", str(image)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

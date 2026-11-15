@@ -18,7 +18,8 @@
         <label id="pathRow" hidden>Image / ISO path<input id="vmPath" placeholder="/path/to/image.iso" autocomplete="off"></label>
       </div>
       <p class="hint" id="imageHint"></p>
-      <label class="check-line" id="unattendRow" hidden><input id="vmUnattend" type="checkbox"> Unattended Windows install <span class="muted">local account <b>orqella</b> / <b>orqella</b></span></label>
+      <label class="check-line" id="unattendRow" hidden><input id="vmUnattend" type="checkbox"> Unattended Windows install <span class="muted">local account <b>orqella</b> / generated password</span></label>
+      <label id="passwordRow" hidden>Windows password<input id="vmPassword" type="password" autocomplete="new-password" placeholder="Generated if blank"></label>
       <div class="actions"><button id="createButton" type="submit">Create VM</button><span id="createStatus"></span></div>
       <pre id="createLog" hidden></pre>
     </form>

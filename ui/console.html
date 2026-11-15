@@ -68,6 +68,26 @@
     }
     #kbd.visible { display: block; }
     #kbd:focus { border-color: var(--focus-border); }
+
+    .password-card {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 70;
+      width: min(360px, calc(100vw - 32px));
+    }
+    .password-card input {
+      width: 100%;
+      margin: 10px 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--input-bg);
+      color: var(--ink);
+      padding: 8px 9px;
+      font: inherit;
+    }
+    .password-actions { display: flex; justify-content: flex-end; gap: 8px; }
   </style>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231a1b26'/%3E%3Cpath d='M9 22V10l7 7 7-7v12' fill='none' stroke='%237aa2f7' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
@@ -101,6 +121,16 @@
       <h1 id="overlayTitle">Connecting to the VM…</h1>
       <p id="overlayText">Opening the framebuffer.</p>
       <p id="hint">Tap Keyboard for your phone's keyboard. On desktop, click the screen to capture the keyboard; Ctrl+Alt+G releases the pointer.</p>
+    </div>
+  </div>
+
+  <div class="card password-card" id="passwordRequest" hidden>
+    <h1>VNC password</h1>
+    <p>This VM requires a console password.</p>
+    <input id="vncPasswordInput" type="password" autocomplete="off" aria-label="VNC password" />
+    <div class="password-actions">
+      <button id="vncPasswordCancel" type="button">Cancel</button>
+      <button id="vncPasswordOk" type="button">Connect</button>
     </div>
   </div>
   <script>

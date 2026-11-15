@@ -12,7 +12,8 @@ A portable QEMU VM manager for Orqella.
 - Windows guests use IDE disks and Intel `e1000` networking so Windows Setup can
   see the target disk without virtio drivers.
 - Windows ISO creation can generate an unattended-answer floppy. The guest gets
-  a local administrator `orqella`/`orqella`, bypasses Windows 11 compatibility
+  a local administrator named `orqella` with a generated password (or the
+  password you supply), bypasses Windows 11 compatibility
   checks, and enables OpenSSH on first logon.
 - Supports a prepared disk image as the backing image.
 - Gives every running VM a VNC console through the Orqella module websocket
@@ -62,6 +63,13 @@ and cloud-init data over QEMU's user network. Installer ISOs are attached to the
 VM; install through the console, then press **Finish install** to detach the
 installer and boot the installed disk.
 
+Cloud images download into `data/images/` on first create. Remote image URLs
+must use HTTPS; loopback HTTP mirrors are allowed. A catalog entry or recipe may
+set `sha256` to a 64-character digest, which is checked for both downloads and
+cached files. Downloads are capped at 16 GiB and a short read fails the job. The
+built-in cloud entries follow moving "latest" URLs, so they do not pin a
+digest; pin a copy with `sha256` when reproducibility matters.
+
 ## Display modes
 
 - **Desktop window + console**: opens the normal QEMU window and also exposes a
@@ -70,7 +78,9 @@ installer and boot the installed disk.
 
 The console is available for both modes. For Linux cloud images, cloud-init
 configures the SSH key and user, so the terminal is usable once boot completes.
-Windows terminal support depends on the guest having OpenSSH enabled.
+Windows terminal support depends on the guest having OpenSSH enabled. The
+console and terminal open in nested module frames; the VM Lab page relays the
+Orqella SDK for those frames and passes the module WebSocket token in their URL.
 
 QEMU's default user network forwards TCP SSH only. VM metadata may add UDP
 forwards for guest services that need inbound UDP, such as an Orqella Link
@@ -102,7 +112,11 @@ UEFI path but does not auto-create a TPM. Customize the VM/catalog for stricter
 Windows requirements.
 
 Windows unattended installation is available when creating an ISO VM: enable
-**Unattended Windows install** in the New VM form. This has been validated with
+**Unattended Windows install** in the New VM form. The local administrator
+password is the value you enter; if you leave it blank the sidecar generates a
+random password and prints it once in the create log. It is stored only in the
+VM's `data/vms/<name>/meta.json` and unattended files, all mode 0600. This has
+been validated with
 Windows 11 Enterprise Evaluation 24H2 on a BIOS-compatible QEMU setup. UEFI CD
 boot of that evaluation ISO currently fails under OVMF; investigate that before
 making UEFI the default for Windows guests. The manual install path also remains
@@ -119,6 +133,10 @@ sidecar `max_memory_mb` policy; plan host memory separately from the sidecar
 limit.
 
 The sidecar runs unsandboxed because it must launch QEMU, manage disks, and
-listen on loopback ports for VNC/SSH. VNC and module websocket routes are
-loopback-only and authenticated by the Orqella module bridge. The VNC server has
-no password, so do not expose its port beyond loopback.
+listen on loopback ports for VNC/SSH. VNC listens only on loopback and requires
+the per-VM password that the sidecar sets through QMP and returns to the module
+page; do not expose the port beyond loopback. On Windows the QMP endpoint is a
+loopback TCP socket without authentication, so any local user can control that
+VM. Treat that as a Windows-only residual risk; Unix hosts use a mode-0600 Unix
+socket. VM metadata, unattended files, seed data, and images are mode
+0600/0700 under `data/`.
