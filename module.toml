@@ -1,12 +1,10 @@
 schema = 1
 id = "vm-lab"
 name = "VM Lab"
-version = "0.1.6"
+version = "0.1.7"
 api_version = "1"
 description = "Create and control local Linux, Windows, and macOS VMs with a browser console."
 entry = "ui/index.html"
-overview = "ui/overview.html"
-overview_default = true
 page_default = true
 icon = "ui/icon.svg"
 node_scope = "node"
