@@ -268,12 +268,21 @@ function clearModifiers() {
   for (const def of MODIFIERS) setModifier(def, false);
 }
 
-function sendKeyOne(keysym, code = "Unidentified") {
+const SHIFTED_KEYS = {
+  "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7",
+  "*": "8", "(": "9", ")": "0", "_": "-", "+": "=", "{": "[", "}": "]",
+  "|": "\\", ":": ";", '"': "'", "<": ",", ">": ".", "?": "/", "~": "`",
+};
+
+function sendKeyOne(keysym, code = "Unidentified", shift = false) {
   if (!rfb) return;
   const active = MODIFIERS.filter((def) => armedModifiers.has(def.name));
+  const extraShift = shift && !armedModifiers.has("Shift");
   try {
     for (const def of active) rfb.sendKey(def.keysym, def.code, true);
+    if (extraShift) rfb.sendKey(0xFFE1, "ShiftLeft", true);
     rfb.sendKey(keysym, code);
+    if (extraShift) rfb.sendKey(0xFFE1, "ShiftLeft", false);
     for (const def of [...active].reverse()) rfb.sendKey(def.keysym, def.code, false);
   } catch (_) {
   } finally {
@@ -281,21 +290,21 @@ function sendKeyOne(keysym, code = "Unidentified") {
   }
 }
 
-function sendText(text) {
-  const chars = Array.from(text);
-  const useMods = armedModifiers.size > 0;
-  for (let i = 0; i < chars.length; i++) {
-    const ch = chars[i];
-    const cp = ch.codePointAt(0);
-    let keysym;
-    if (cp === 0x0A || cp === 0x0D) keysym = 0xFF0D;
-    else if (cp === 0x09) keysym = 0xFF09;
-    else if (cp >= 0x20 && cp <= 0xFF) keysym = cp;
-    else keysym = 0x01000000 + cp; // X11 Unicode keysym
+function textKeysym(ch) {
+  const cp = ch.codePointAt(0);
+  if (cp === 0x0A || cp === 0x0D) return [0xFF0D, "Enter", false];
+  if (cp === 0x09) return [0xFF09, "Tab", false];
+  if (cp >= 0x41 && cp <= 0x5A) return [cp + 0x20, "Unidentified", true];
+  const shifted = SHIFTED_KEYS[ch];
+  if (shifted) return [shifted.charCodeAt(0), "Unidentified", true];
+  if (cp >= 0x20 && cp <= 0xFF) return [cp, "Unidentified", false];
+  return [0x01000000 + cp, "Unidentified", false];
+}
 
-    const code = cp === 0x0D ? "Enter" : (cp === 0x09 ? "Tab" : "Unidentified");
-    if (useMods && i === 0) sendKeyOne(keysym, code);
-    else sendKey(keysym, code);
+function sendText(text) {
+  for (const ch of Array.from(text)) {
+    const [keysym, code, shift] = textKeysym(ch);
+    sendKeyOne(keysym, code, shift);
   }
 }
 
