@@ -5,6 +5,11 @@ import RFB from "./novnc/core/rfb.js";
 
 const params = new URLSearchParams(location.search);
 const vm = (params.get("name") || params.get("vm") || "").trim();
+const wsToken = (() => {
+  const match = location.hash.match(/[#&]__orqella_ws=([^&]+)/);
+  if (!match) return "";
+  try { return decodeURIComponent(match[1]); } catch (_) { return ""; }
+})();
 const screen = document.getElementById("screen");
 const overlay = document.getElementById("overlay");
 const overlayTitle = document.getElementById("overlayTitle");
@@ -141,10 +146,11 @@ function connect() {
 
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const base = location.pathname.replace(/\/(?:ui\/)?console\.html$/, "/");
-  const url = `${scheme}://${location.host}${base}ws/console?name=${encodeURIComponent(vm)}`;
+  const url = new URL(`${scheme}://${location.host}${base}ws/console?name=${encodeURIComponent(vm)}`);
+  if (wsToken) url.searchParams.set("__orqella_ws", wsToken);
 
   try {
-    rfb = new RFB(screen, url);
+    rfb = new RFB(screen, url.toString());
   } catch (err) {
     showFatal("Could not start the VNC client", String(err && err.message || err));
     return;

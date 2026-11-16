@@ -8,6 +8,11 @@
   const name = params.get("name") || "";
   const base = location.pathname.replace(/\/(?:ui\/)?terminal\.html$/, "/");
   const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const wsToken = (() => {
+    const match = location.hash.match(/[#&]__orqella_ws=([^&]+)/);
+    if (!match) return "";
+    try { return decodeURIComponent(match[1]); } catch (_) { return ""; }
+  })();
   const out = $("out");
   const entry = $("entry");
   $("name").textContent = name;
@@ -16,7 +21,9 @@
   function setState(text, cls = "") { $("state").textContent = text; $("state").className = `state ${cls}`; }
   function send(data) { if (ws?.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data)); }
   try {
-    ws = new WebSocket(`${scheme}://${location.host}${base}ws/terminal?name=${encodeURIComponent(name)}`);
+    const wsUrl = new URL(`${scheme}://${location.host}${base}ws/terminal?name=${encodeURIComponent(name)}`);
+    if (wsToken) wsUrl.searchParams.set("__orqella_ws", wsToken);
+    ws = new WebSocket(wsUrl.toString());
     ws.binaryType = "arraybuffer";
     ws.onopen = () => { setState("connected", "good"); entry.focus(); };
     ws.onmessage = (event) => {
