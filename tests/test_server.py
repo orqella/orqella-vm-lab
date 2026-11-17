@@ -371,6 +371,19 @@ class VmLabEdgeTests(unittest.TestCase):
         handler.rfile = io.BytesIO(bytes([0x82, 0xFE, 0x00]))
         self.assertEqual(handler.ws_read(), (None, b""))
 
+    def test_vnc_stream_drops_the_connect_timeout(self) -> None:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        try:
+            upstream = server.connect_vnc_stream(listener.getsockname()[1])
+            try:
+                self.assertIsNone(upstream.gettimeout())
+            finally:
+                upstream.close()
+        finally:
+            listener.close()
+
     def test_image_source_rejects_traversal_and_cleans_partial_download(self) -> None:
         with self.assertRaises(ValueError):
             server.image_source({"id": "../escape", "url": "https://example.invalid/a.img"}, print)

@@ -35,6 +35,9 @@ let composing = false;
 let stopped = false;
 let retryTimer = null;
 let retryDelay = 1200;
+let everConnected = false;
+let outageTimer = null;
+const OUTAGE_OVERLAY_MS = 6000;
 let passwordResolve = null;
 let nestSequence = 0;
 const nestPending = new Map();
@@ -113,8 +116,27 @@ function hideOverlay() {
 
 function showFatal(title, text) {
   stopped = true;
+  clearOutageOverlay();
   setState("offline");
   showOverlay(title, text, false);
+}
+
+function clearOutageOverlay() {
+  if (outageTimer) {
+    clearTimeout(outageTimer);
+    outageTimer = null;
+  }
+}
+
+// A transient transport drop should not replace the last framebuffer with a
+// full-screen failure card. Keep showing the guest and only cover it if the
+// outage persists long enough that the user needs an explanation.
+function scheduleOutageOverlay(title, text) {
+  clearOutageOverlay();
+  outageTimer = setTimeout(() => {
+    outageTimer = null;
+    if (!stopped) showOverlay(title, text, true);
+  }, OUTAGE_OVERLAY_MS);
 }
 
 async function loadVncPassword() {
@@ -141,8 +163,10 @@ function connect() {
   stopped = false;
   retryDelay = 1200;
   clearModifiers();
-  setState("connecting…");
-  showOverlay("Connecting to " + vm + "…", "Opening the framebuffer.", true);
+  setState(everConnected ? "reconnecting…" : "connecting…");
+  if (!everConnected) {
+    showOverlay("Connecting to " + vm + "…", "Opening the framebuffer.", true);
+  }
 
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const base = location.pathname.replace(/\/(?:ui\/)?console\.html$/, "/");
@@ -166,6 +190,8 @@ function connect() {
   rfb.showDotCursor = true;
 
   rfb.addEventListener("connect", () => {
+    everConnected = true;
+    clearOutageOverlay();
     retryDelay = 1200;
     setState("connected");
     hideOverlay();
@@ -183,14 +209,22 @@ function connect() {
 
   rfb.addEventListener("disconnect", (e) => {
     clearModifiers();
-    setState("disconnected");
+    clearOutageOverlay();
+    setState("reconnecting…");
     if (stopped) return;
     const clean = e.detail && e.detail.clean;
-    showOverlay(
-      clean ? "VM console disconnected" : "VM console lost",
-      clean ? "The session ended." : "The VM may have stopped, or the VNC port closed. Retrying…",
-      true,
-    );
+    if (!everConnected) {
+      showOverlay(
+        clean ? "VM console disconnected" : "VM console lost",
+        clean ? "The session ended." : "The VM may have stopped, or the VNC port closed. Retrying…",
+        true,
+      );
+    } else {
+      scheduleOutageOverlay(
+        clean ? "VM console disconnected" : "VM console lost",
+        clean ? "The session ended. Reconnecting…" : "The VM may have stopped, or the VNC port closed. Retrying…",
+      );
+    }
     retryTimer = setTimeout(connect, retryDelay);
     retryDelay = Math.min(retryDelay * 1.6, 8000);
   });
@@ -418,6 +452,7 @@ window.addEventListener("paste", (e) => {
 window.addEventListener("beforeunload", () => {
   stopped = true;
   clearTimeout(retryTimer);
+  clearOutageOverlay();
   try { rfb && rfb.disconnect(); } catch (_) {}
 });
 

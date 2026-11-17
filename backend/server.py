@@ -1777,6 +1777,18 @@ def ws_frame(opcode, payload):
     return bytes(header) + payload
 
 
+def connect_vnc_stream(port: int) -> socket.socket:
+    """Open the long-lived QEMU VNC TCP stream.
+
+    QEMU only writes when the guest framebuffer changes. The connect timeout
+    must not remain on the stream: an idle screen would raise socket.timeout in
+    bridge_vnc every five seconds and tear down a healthy console.
+    """
+    upstream = socket.create_connection(("127.0.0.1", port), timeout=5)
+    upstream.settimeout(None)
+    return upstream
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1888,7 +1900,7 @@ class Handler(BaseHTTPRequestHandler):
             port = int(meta.get("vnc_port") or 0)
             if not port:
                 return self.send_json(503, {"error": "VM has no VNC console"})
-            upstream = socket.create_connection(("127.0.0.1", port), timeout=5)
+            upstream = connect_vnc_stream(port)
             self.websocket_handshake(key)
             self.bridge_vnc(upstream)
         elif parsed.path == "/ws/terminal":
