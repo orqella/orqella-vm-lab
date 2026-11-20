@@ -82,6 +82,14 @@ Windows terminal support depends on the guest having OpenSSH enabled. The
 console and terminal open in nested module frames; the VM Lab page relays the
 Orqella SDK for those frames and passes the module WebSocket token in their URL.
 
+`ui/console.bundle.js` is generated from `ui/console.js` and the vendored noVNC
+sources. Rebuild it after changing the console:
+
+```bash
+npx esbuild ui/console.js --bundle --format=esm --platform=browser \
+  --target=es2022 --outfile=ui/console.bundle.js
+```
+
 QEMU's default user network forwards TCP SSH only. VM metadata may add UDP
 forwards for guest services that need inbound UDP, such as an Orqella Link
 endpoint on a testbed:
