@@ -14078,15 +14078,15 @@ RFB.cursors = {
 };
 
 // ui/console.js
-var sourceUrl = window.__ORQELLA_MODULE_URL || location.href;
-var sourcePath = (() => {
+var source = (() => {
   try {
-    return new URL(sourceUrl, "http://module.invalid").pathname;
+    return new URL(window.__ORQELLA_MODULE_URL || location.href, "http://module.invalid");
   } catch (_) {
-    return location.pathname;
+    return new URL("/", "http://module.invalid");
   }
 })();
-var params = new URLSearchParams(sourceUrl.split("?")[1] || "");
+var sourcePath = source.pathname;
+var params = source.searchParams;
 var vm = (params.get("name") || params.get("vm") || "").trim();
 var wsToken = (() => {
   const match = location.hash.match(/[#&]__orqella_ws=([^&]+)/);

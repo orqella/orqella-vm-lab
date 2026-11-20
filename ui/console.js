@@ -3,11 +3,12 @@
 
 import RFB from "./novnc/core/rfb.js";
 
-const sourceUrl = window.__ORQELLA_MODULE_URL || location.href;
-const sourcePath = (() => {
-  try { return new URL(sourceUrl, "http://module.invalid").pathname; } catch (_) { return location.pathname; }
+const source = (() => {
+  try { return new URL(window.__ORQELLA_MODULE_URL || location.href, "http://module.invalid"); }
+  catch (_) { return new URL("/", "http://module.invalid"); }
 })();
-const params = new URLSearchParams((sourceUrl.split("?")[1] || ""));
+const sourcePath = source.pathname;
+const params = source.searchParams;
 const vm = (params.get("name") || params.get("vm") || "").trim();
 const wsToken = (() => {
   const match = location.hash.match(/[#&]__orqella_ws=([^&]+)/);

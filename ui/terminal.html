@@ -4,11 +4,12 @@
 </style></head><body><div class="bar"><b id="name">terminal</b><span>SSH</span><span class="state" id="state">connecting…</span></div><pre id="out"></pre><input id="entry" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type here…"></body><script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const sourceUrl = window.__ORQELLA_MODULE_URL || location.href;
-  const sourcePath = (() => {
-    try { return new URL(sourceUrl, "http://module.invalid").pathname; } catch (_) { return location.pathname; }
+  const source = (() => {
+    try { return new URL(window.__ORQELLA_MODULE_URL || location.href, "http://module.invalid"); }
+    catch (_) { return new URL("/", "http://module.invalid"); }
   })();
-  const params = new URLSearchParams((sourceUrl.split("?")[1] || ""));
+  const sourcePath = source.pathname;
+  const params = source.searchParams;
   const name = params.get("name") || "";
   const base = sourcePath.replace(/\/(?:ui\/)?terminal\.html$/, "/");
   const protocol = window.__ORQELLA_MODULE_PROTOCOL || location.protocol;
