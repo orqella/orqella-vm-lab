@@ -296,55 +296,7 @@ try {
   Error2("Scrollbar test exception: " + exc);
 }
 var supportsWebCodecsH264Decode = false;
-async function _checkWebCodecsH264DecodeSupport() {
-  if (!("VideoDecoder" in window)) {
-    return false;
-  }
-  const config = {
-    codec: "avc1.42401f",
-    codedWidth: 1920,
-    codedHeight: 1080,
-    optimizeForLatency: true
-  };
-  let support = await VideoDecoder.isConfigSupported(config);
-  if (!support.supported) {
-    return false;
-  }
-  const data = new Uint8Array(base64_default.decode(
-    "AAAAAWdCwBTZnpuAgICgAAADACAAAAZB4oVNAAAAAWjJYyyAAAABBgX//4HcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY0IHIzMTA4IDMxZTE5ZjkgLSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDIzIC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9NSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJtZT04IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0yIDh4OGRjdD0wIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3RfcHNraXA9MSBjaHJvbWFfcXBfb2Zmc2V0PS0yIHRocmVhZHM9MSBsb29rYWhlYWRfdGhyZWFkcz0xIHNsaWNlZF90aHJlYWRzPTAgbnI9MCBkZWNpbWF0ZT0xIGludGVybGFjZWQ9MCBibHVyYXlfY29tcGF0PTAgY29uc3RyYWluZWRfaW50cmE9MCBiZnJhbWVzPTAgd2VpZ2h0cD0wIGtleWludD1pbmZpbml0ZSBrZXlpbnRfbWluPTI1IHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NTAgcmM9YWJyIG1idHJlZT0xIGJpdHJhdGU9NDAwIHJhdGV0b2w9MS4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAABZYiEBrxmKAAPVccAAS044AA5DRJMnkycJk4TPw=="
-  ));
-  let gotframe = false;
-  let error = null;
-  let decoder = new VideoDecoder({
-    output: (frame) => {
-      gotframe = true;
-      frame.close();
-    },
-    error: (e2) => {
-      error = e2;
-    }
-  });
-  let chunk = new EncodedVideoChunk({
-    timestamp: 0,
-    type: "key",
-    data
-  });
-  decoder.configure(config);
-  decoder.decode(chunk);
-  try {
-    await decoder.flush();
-  } catch (e2) {
-    error = e2;
-  }
-  if (!gotframe) {
-    return false;
-  }
-  if (error !== null) {
-    return false;
-  }
-  return true;
-}
-supportsWebCodecsH264Decode = await _checkWebCodecsH264DecodeSupport();
+supportsWebCodecsH264Decode = false;
 function isMac() {
   return !!/mac/i.exec(navigator.platform);
 }

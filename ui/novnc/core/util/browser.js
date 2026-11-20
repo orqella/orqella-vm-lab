@@ -149,7 +149,11 @@ async function _checkWebCodecsH264DecodeSupport() {
 
     return true;
 }
-supportsWebCodecsH264Decode = await _checkWebCodecsH264DecodeSupport();
+// Do not probe WebCodecs during module evaluation. Some WebViews block inside
+// VideoDecoder.isConfigSupported(), which stalls the whole console module and
+// leaves the connection overlay up forever. H.264 is optional; noVNC falls
+// back to the other RFB encodings when this is false.
+supportsWebCodecsH264Decode = false;
 
 /*
  * The functions for detection of platforms and browsers below are exported
