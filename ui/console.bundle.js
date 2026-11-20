@@ -14030,6 +14030,7 @@ RFB.cursors = {
 };
 
 // ui/console.js
+var CONSOLE_VERSION = "0.1.10";
 var source = (() => {
   try {
     return new URL(window.__ORQELLA_MODULE_URL || location.href, "http://module.invalid");
@@ -14075,6 +14076,9 @@ var retryTimer = null;
 var retryDelay = 1200;
 var everConnected = false;
 var outageTimer = null;
+var connectTimer = null;
+var socketError = "";
+var socketClose = "";
 var OUTAGE_OVERLAY_MS = 6e3;
 var passwordResolve = null;
 var nestSequence = 0;
@@ -14185,8 +14189,11 @@ function connect() {
     rfb = null;
   }
   clearTimeout(retryTimer);
+  clearTimeout(connectTimer);
   stopped = false;
   retryDelay = 1200;
+  socketError = "";
+  socketClose = "";
   clearModifiers();
   setState(everConnected ? "reconnecting\u2026" : "connecting\u2026");
   if (!everConnected) {
@@ -14212,8 +14219,46 @@ function connect() {
   rfb.viewOnly = false;
   rfb.focusOnClick = true;
   rfb.showDotCursor = true;
+  const socket = rfb?._sock?._websocket;
+  if (socket) {
+    socket.addEventListener("error", () => {
+      socketError = "WebSocket error";
+      setTimeout(() => {
+        if (!stopped && !everConnected && rfb) {
+          try {
+            rfb.disconnect();
+          } catch (_) {
+          }
+        }
+      }, 1500);
+    });
+    socket.addEventListener("close", (event) => {
+      socketClose = `${event.code}${event.reason ? ` ${event.reason}` : ""}`;
+    });
+  }
+  connectTimer = setTimeout(() => {
+    if (stopped || everConnected || !rfb) return;
+    const ws = rfb?._sock?._websocket;
+    let target = "unknown";
+    try {
+      const parsed = new URL(ws.url);
+      target = `${parsed.host}${parsed.pathname}`;
+    } catch (_) {
+    }
+    const details = [
+      `VM Lab ${CONSOLE_VERSION}`,
+      `socket ${ws ? ws.readyState : "missing"}`,
+      `error ${socketError || "none"}`,
+      `close ${socketClose || "none"}`,
+      `target ${target}`,
+      `token ${wsToken ? "present" : "missing"}`
+    ].join(" \xB7 ");
+    showOverlay(`Still connecting to ${vm}\u2026`, `Opening the framebuffer.
+${details}`, true);
+  }, 8e3);
   rfb.addEventListener("connect", () => {
     everConnected = true;
+    clearTimeout(connectTimer);
     clearOutageOverlay();
     retryDelay = 1200;
     setState("connected");
@@ -14232,6 +14277,7 @@ function connect() {
     }
   });
   rfb.addEventListener("disconnect", (e2) => {
+    clearTimeout(connectTimer);
     clearModifiers();
     clearOutageOverlay();
     setState("reconnecting\u2026");

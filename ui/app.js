@@ -7,6 +7,7 @@
   let vms = [];
   let jobTimer = null;
   let agentTimer = null;
+  const UI_VERSION = "0.1.10";
   const backend = (path, method = "GET", body) => window.orqella.call("backend.request", {
     method,
     path,
@@ -20,7 +21,13 @@
   }
 
   function nestedFrameUrl(url) {
-    const token = context?.ws_token || "";
+    let token = context?.ws_token || "";
+    if (!token) {
+      const match = location.hash.match(/[#&]__orqella_ws=([^&]+)/);
+      if (match) {
+        try { token = decodeURIComponent(match[1]); } catch (_) { token = match[1]; }
+      }
+    }
     if (!token) return url;
     const separator = url.includes("#") ? "&" : "#";
     return `${url}${separator}__orqella_ws=${encodeURIComponent(token)}`;
@@ -258,13 +265,13 @@
 
   function openConsole(name) {
     $("consoleTitle").textContent = `${name} · console`;
-    loadNestedFrame($("consoleFrame"), `console.html?name=${encodeURIComponent(name)}`);
+    loadNestedFrame($("consoleFrame"), `console.html?name=${encodeURIComponent(name)}&v=${UI_VERSION}`);
     $("consoleModal").hidden = false;
   }
 
   function openTerminal(name) {
     $("terminalTitle").textContent = `${name} · terminal`;
-    loadNestedFrame($("terminalFrame"), `terminal.html?name=${encodeURIComponent(name)}`);
+    loadNestedFrame($("terminalFrame"), `terminal.html?name=${encodeURIComponent(name)}&v=${UI_VERSION}`);
     $("terminalModal").hidden = false;
   }
 

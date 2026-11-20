@@ -3,6 +3,7 @@
 
 import RFB from "./novnc/core/rfb.js";
 
+const CONSOLE_VERSION = "0.1.10";
 const source = (() => {
   try { return new URL(window.__ORQELLA_MODULE_URL || location.href, "http://module.invalid"); }
   catch (_) { return new URL("/", "http://module.invalid"); }
@@ -42,6 +43,9 @@ let retryTimer = null;
 let retryDelay = 1200;
 let everConnected = false;
 let outageTimer = null;
+let connectTimer = null;
+let socketError = "";
+let socketClose = "";
 const OUTAGE_OVERLAY_MS = 6000;
 let passwordResolve = null;
 let nestSequence = 0;
@@ -165,8 +169,11 @@ function connect() {
     rfb = null;
   }
   clearTimeout(retryTimer);
+  clearTimeout(connectTimer);
   stopped = false;
   retryDelay = 1200;
+  socketError = "";
+  socketClose = "";
   clearModifiers();
   setState(everConnected ? "reconnecting…" : "connecting…");
   if (!everConnected) {
@@ -196,8 +203,45 @@ function connect() {
   rfb.focusOnClick = true;
   rfb.showDotCursor = true;
 
+  // noVNC only logs WebSocket errors. Some WebViews fire error without a close
+  // event, which would otherwise leave the console on "connecting" forever.
+  const socket = rfb?._sock?._websocket;
+  if (socket) {
+    socket.addEventListener("error", () => {
+      socketError = "WebSocket error";
+      setTimeout(() => {
+        if (!stopped && !everConnected && rfb) {
+          try { rfb.disconnect(); } catch (_) {}
+        }
+      }, 1500);
+    });
+    socket.addEventListener("close", (event) => {
+      socketClose = `${event.code}${event.reason ? ` ${event.reason}` : ""}`;
+    });
+  }
+
+  connectTimer = setTimeout(() => {
+    if (stopped || everConnected || !rfb) return;
+    const ws = rfb?._sock?._websocket;
+    let target = "unknown";
+    try {
+      const parsed = new URL(ws.url);
+      target = `${parsed.host}${parsed.pathname}`;
+    } catch (_) {}
+    const details = [
+      `VM Lab ${CONSOLE_VERSION}`,
+      `socket ${ws ? ws.readyState : "missing"}`,
+      `error ${socketError || "none"}`,
+      `close ${socketClose || "none"}`,
+      `target ${target}`,
+      `token ${wsToken ? "present" : "missing"}`,
+    ].join(" · ");
+    showOverlay(`Still connecting to ${vm}…`, `Opening the framebuffer.\n${details}`, true);
+  }, 8000);
+
   rfb.addEventListener("connect", () => {
     everConnected = true;
+    clearTimeout(connectTimer);
     clearOutageOverlay();
     retryDelay = 1200;
     setState("connected");
@@ -215,6 +259,7 @@ function connect() {
   });
 
   rfb.addEventListener("disconnect", (e) => {
+    clearTimeout(connectTimer);
     clearModifiers();
     clearOutageOverlay();
     setState("reconnecting…");

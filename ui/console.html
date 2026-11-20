@@ -45,7 +45,7 @@
       box-shadow: var(--shadow);
     }
     .card h1 { margin: 0 0 6px; font-size: 16px; color: var(--ink); font-weight: 650; }
-    .card p { margin: 0; color: var(--muted); }
+    .card p { margin: 0; color: var(--muted); white-space: pre-wrap; }
     .card .err { color: var(--red); }
     .spinner {
       width: 26px; height: 26px; margin: 0 auto 12px;
@@ -152,6 +152,6 @@
       consoleError("Console script error", reason);
     });
   </script>
-  <script type="module" src="./console.bundle.js?v=0.1.9"></script>
+  <script type="module" src="./console.bundle.js?v=0.1.10"></script>
 </body>
 </html>
