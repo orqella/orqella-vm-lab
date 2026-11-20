@@ -4,10 +4,16 @@
 </style></head><body><div class="bar"><b id="name">terminal</b><span>SSH</span><span class="state" id="state">connecting…</span></div><pre id="out"></pre><input id="entry" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type here…"></body><script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const params = new URLSearchParams(location.search);
+  const sourceUrl = window.__ORQELLA_MODULE_URL || location.href;
+  const sourcePath = (() => {
+    try { return new URL(sourceUrl, "http://module.invalid").pathname; } catch (_) { return location.pathname; }
+  })();
+  const params = new URLSearchParams((sourceUrl.split("?")[1] || ""));
   const name = params.get("name") || "";
-  const base = location.pathname.replace(/\/(?:ui\/)?terminal\.html$/, "/");
-  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const base = sourcePath.replace(/\/(?:ui\/)?terminal\.html$/, "/");
+  const protocol = window.__ORQELLA_MODULE_PROTOCOL || location.protocol;
+  const host = window.__ORQELLA_MODULE_HOST || location.host;
+  const scheme = protocol === "https:" ? "wss" : "ws";
   const wsToken = (() => {
     const match = location.hash.match(/[#&]__orqella_ws=([^&]+)/);
     if (!match) return "";
@@ -21,7 +27,7 @@
   function setState(text, cls = "") { $("state").textContent = text; $("state").className = `state ${cls}`; }
   function send(data) { if (ws?.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data)); }
   try {
-    const wsUrl = new URL(`${scheme}://${location.host}${base}ws/terminal?name=${encodeURIComponent(name)}`);
+    const wsUrl = new URL(`${scheme}://${host}${base}ws/terminal?name=${encodeURIComponent(name)}`);
     if (wsToken) wsUrl.searchParams.set("__orqella_ws", wsToken);
     ws = new WebSocket(wsUrl.toString());
     ws.binaryType = "arraybuffer";

@@ -1,7 +1,7 @@
 schema = 1
 id = "vm-lab"
 name = "VM Lab"
-version = "0.1.7"
+version = "0.1.8"
 api_version = "1"
 description = "Create and control local Linux, Windows, and macOS VMs with a browser console."
 entry = "ui/index.html"

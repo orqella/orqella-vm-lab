@@ -26,6 +26,24 @@
     return `${url}${separator}__orqella_ws=${encodeURIComponent(token)}`;
   }
 
+  function loadNestedFrame(frame, url) {
+    const target = nestedFrameUrl(url);
+    if (window.__ORQELLA_MODULE_INLINE && typeof window.__orqellaModuleBroker?.bundle === "function") {
+      let bundlePath = target;
+      try {
+        const resolved = new URL(target, document.baseURI);
+        bundlePath = `${resolved.pathname}${resolved.search}`;
+      } catch (_) {}
+      frame.removeAttribute("src");
+      frame.srcdoc = "";
+      window.__orqellaModuleBroker.bundle(bundlePath)
+        .then((html) => { frame.srcdoc = html; })
+        .catch(() => { frame.src = target; });
+      return;
+    }
+    frame.src = target;
+  }
+
   function initNestedFrame(frame) {
     if (!frame?.contentWindow) return;
     frame.contentWindow.postMessage(
@@ -240,13 +258,13 @@
 
   function openConsole(name) {
     $("consoleTitle").textContent = `${name} · console`;
-    $("consoleFrame").src = nestedFrameUrl(`console.html?name=${encodeURIComponent(name)}`);
+    loadNestedFrame($("consoleFrame"), `console.html?name=${encodeURIComponent(name)}`);
     $("consoleModal").hidden = false;
   }
 
   function openTerminal(name) {
     $("terminalTitle").textContent = `${name} · terminal`;
-    $("terminalFrame").src = nestedFrameUrl(`terminal.html?name=${encodeURIComponent(name)}`);
+    loadNestedFrame($("terminalFrame"), `terminal.html?name=${encodeURIComponent(name)}`);
     $("terminalModal").hidden = false;
   }
 
@@ -378,10 +396,10 @@
   $("askAi").onclick = () => { $("agentPanel").hidden = !$("agentPanel").hidden; if (!$("agentPanel").hidden) $("agentPrompt").focus(); };
   $("agentRun").onclick = runAgent;
   $("createForm").onsubmit = create;
-  $("consoleClose").onclick = () => { $("consoleModal").hidden = true; $("consoleFrame").src = "about:blank"; };
-  $("terminalClose").onclick = () => { $("terminalModal").hidden = true; $("terminalFrame").src = "about:blank"; };
+  $("consoleClose").onclick = () => { $("consoleModal").hidden = true; $("consoleFrame").removeAttribute("srcdoc"); $("consoleFrame").src = "about:blank"; };
+  $("terminalClose").onclick = () => { $("terminalModal").hidden = true; $("terminalFrame").removeAttribute("srcdoc"); $("terminalFrame").src = "about:blank"; };
   [["consoleModal", "consoleFrame"], ["terminalModal", "terminalFrame"]].forEach(([modal, frame]) => {
-    $(modal).onclick = (event) => { if (event.target === $(modal)) { $(modal).hidden = true; $(frame).src = "about:blank"; } };
+    $(modal).onclick = (event) => { if (event.target === $(modal)) { $(modal).hidden = true; $(frame).removeAttribute("srcdoc"); $(frame).src = "about:blank"; } };
   });
   $("confirmCancel").onclick = () => resolveConfirm(false);
   $("confirmOk").onclick = () => resolveConfirm(true);

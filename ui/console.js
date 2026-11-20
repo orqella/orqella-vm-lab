@@ -3,7 +3,11 @@
 
 import RFB from "./novnc/core/rfb.js";
 
-const params = new URLSearchParams(location.search);
+const sourceUrl = window.__ORQELLA_MODULE_URL || location.href;
+const sourcePath = (() => {
+  try { return new URL(sourceUrl, "http://module.invalid").pathname; } catch (_) { return location.pathname; }
+})();
+const params = new URLSearchParams((sourceUrl.split("?")[1] || ""));
 const vm = (params.get("name") || params.get("vm") || "").trim();
 const wsToken = (() => {
   const match = location.hash.match(/[#&]__orqella_ws=([^&]+)/);
@@ -168,9 +172,11 @@ function connect() {
     showOverlay("Connecting to " + vm + "…", "Opening the framebuffer.", true);
   }
 
-  const scheme = location.protocol === "https:" ? "wss" : "ws";
-  const base = location.pathname.replace(/\/(?:ui\/)?console\.html$/, "/");
-  const url = new URL(`${scheme}://${location.host}${base}ws/console?name=${encodeURIComponent(vm)}`);
+  const protocol = window.__ORQELLA_MODULE_PROTOCOL || location.protocol;
+  const host = window.__ORQELLA_MODULE_HOST || location.host;
+  const scheme = protocol === "https:" ? "wss" : "ws";
+  const base = sourcePath.replace(/\/(?:ui\/)?console\.html$/, "/");
+  const url = new URL(`${scheme}://${host}${base}ws/console?name=${encodeURIComponent(vm)}`);
   if (wsToken) url.searchParams.set("__orqella_ws", wsToken);
 
   try {
