@@ -3,7 +3,7 @@
 
 import RFB from "./novnc/core/rfb.js";
 
-const CONSOLE_VERSION = "0.1.10";
+const CONSOLE_VERSION = "0.1.11";
 const source = (() => {
   try { return new URL(window.__ORQELLA_MODULE_URL || location.href, "http://module.invalid"); }
   catch (_) { return new URL("/", "http://module.invalid"); }
@@ -46,6 +46,20 @@ let outageTimer = null;
 let connectTimer = null;
 let socketError = "";
 let socketClose = "";
+let socketHostIndex = 0;
+
+function socketHosts() {
+  const pageHost = window.__ORQELLA_MODULE_HOST || location.host;
+  const hosts = [];
+  // iOS 26/27 WebKit stalls WebSockets to literal IP addresses. The native
+  // app sets a `.orqella.localhost` tunnel cookie, so prefer that loopback
+  // name when the shell itself is on 127.0.0.1.
+  if (location.hostname === "127.0.0.1" && location.port) {
+    hosts.push(`orqella.localhost:${location.port}`);
+  }
+  hosts.push(pageHost);
+  return [...new Set(hosts)];
+}
 const OUTAGE_OVERLAY_MS = 6000;
 let passwordResolve = null;
 let nestSequence = 0;
@@ -181,8 +195,10 @@ function connect() {
   }
 
   const protocol = window.__ORQELLA_MODULE_PROTOCOL || location.protocol;
-  const host = window.__ORQELLA_MODULE_HOST || location.host;
+  const hosts = socketHosts();
+  const host = hosts[socketHostIndex % hosts.length];
   const scheme = protocol === "https:" ? "wss" : "ws";
+  screen.dataset.socketHost = host;
   const base = sourcePath.replace(/\/(?:ui\/)?console\.html$/, "/");
   const url = new URL(`${scheme}://${host}${base}ws/console?name=${encodeURIComponent(vm)}`);
   if (wsToken) url.searchParams.set("__orqella_ws", wsToken);
@@ -237,6 +253,9 @@ function connect() {
       `token ${wsToken ? "present" : "missing"}`,
     ].join(" · ");
     showOverlay(`Still connecting to ${vm}…`, `Opening the framebuffer.\n${details}`, true);
+    if (hosts.length > 1) {
+      try { rfb.disconnect(); } catch (_) {}
+    }
   }, 8000);
 
   rfb.addEventListener("connect", () => {
@@ -277,6 +296,7 @@ function connect() {
         clean ? "The session ended. Reconnecting…" : "The VM may have stopped, or the VNC port closed. Retrying…",
       );
     }
+    if (!everConnected) socketHostIndex += 1;
     retryTimer = setTimeout(connect, retryDelay);
     retryDelay = Math.min(retryDelay * 1.6, 8000);
   });

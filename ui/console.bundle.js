@@ -14030,7 +14030,7 @@ RFB.cursors = {
 };
 
 // ui/console.js
-var CONSOLE_VERSION = "0.1.10";
+var CONSOLE_VERSION = "0.1.11";
 var source = (() => {
   try {
     return new URL(window.__ORQELLA_MODULE_URL || location.href, "http://module.invalid");
@@ -14079,6 +14079,16 @@ var outageTimer = null;
 var connectTimer = null;
 var socketError = "";
 var socketClose = "";
+var socketHostIndex = 0;
+function socketHosts() {
+  const pageHost = window.__ORQELLA_MODULE_HOST || location.host;
+  const hosts = [];
+  if (location.hostname === "127.0.0.1" && location.port) {
+    hosts.push(`orqella.localhost:${location.port}`);
+  }
+  hosts.push(pageHost);
+  return [...new Set(hosts)];
+}
 var OUTAGE_OVERLAY_MS = 6e3;
 var passwordResolve = null;
 var nestSequence = 0;
@@ -14200,8 +14210,10 @@ function connect() {
     showOverlay("Connecting to " + vm + "\u2026", "Opening the framebuffer.", true);
   }
   const protocol = window.__ORQELLA_MODULE_PROTOCOL || location.protocol;
-  const host = window.__ORQELLA_MODULE_HOST || location.host;
+  const hosts = socketHosts();
+  const host = hosts[socketHostIndex % hosts.length];
   const scheme = protocol === "https:" ? "wss" : "ws";
+  screen.dataset.socketHost = host;
   const base = sourcePath.replace(/\/(?:ui\/)?console\.html$/, "/");
   const url = new URL(`${scheme}://${host}${base}ws/console?name=${encodeURIComponent(vm)}`);
   if (wsToken) url.searchParams.set("__orqella_ws", wsToken);
@@ -14255,6 +14267,12 @@ function connect() {
     ].join(" \xB7 ");
     showOverlay(`Still connecting to ${vm}\u2026`, `Opening the framebuffer.
 ${details}`, true);
+    if (hosts.length > 1) {
+      try {
+        rfb.disconnect();
+      } catch (_) {
+      }
+    }
   }, 8e3);
   rfb.addEventListener("connect", () => {
     everConnected = true;
@@ -14295,6 +14313,7 @@ ${details}`, true);
         clean ? "The session ended. Reconnecting\u2026" : "The VM may have stopped, or the VNC port closed. Retrying\u2026"
       );
     }
+    if (!everConnected) socketHostIndex += 1;
     retryTimer = setTimeout(connect, retryDelay);
     retryDelay = Math.min(retryDelay * 1.6, 8e3);
   });

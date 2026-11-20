@@ -7,7 +7,7 @@
   let vms = [];
   let jobTimer = null;
   let agentTimer = null;
-  const UI_VERSION = "0.1.10";
+  const UI_VERSION = "0.1.11";
   const backend = (path, method = "GET", body) => window.orqella.call("backend.request", {
     method,
     path,

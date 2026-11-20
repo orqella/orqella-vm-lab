@@ -13,7 +13,10 @@
   const name = params.get("name") || "";
   const base = sourcePath.replace(/\/(?:ui\/)?terminal\.html$/, "/");
   const protocol = window.__ORQELLA_MODULE_PROTOCOL || location.protocol;
-  const host = window.__ORQELLA_MODULE_HOST || location.host;
+  const pageHost = window.__ORQELLA_MODULE_HOST || location.host;
+  const host = location.hostname === "127.0.0.1" && location.port
+    ? `orqella.localhost:${location.port}`
+    : pageHost;
   const scheme = protocol === "https:" ? "wss" : "ws";
   const wsToken = (() => {
     const match = location.hash.match(/[#&]__orqella_ws=([^&]+)/);
