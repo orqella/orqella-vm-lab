@@ -1,5 +1,7 @@
 # VM Lab
 
+![VM Lab with the VM creation form and three running or stopped machines](docs/screenshot.png)
+
 A portable QEMU VM manager for Orqella.
 
 ## What it does
